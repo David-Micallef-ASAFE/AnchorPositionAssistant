@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validatePlanFields, validateAnchorFields, duplicateSerialMessage } from './public/validation.js';
+import { serviceWorkerSource } from './tools/buildhash.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -47,24 +48,11 @@ const MIME = {
   '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
-// Hash of every file in public/, injected into the service worker. Any change to the app
-// changes sw.js, so installed phones pick up the new version the next time they can reach
-// the laptop, and always get a complete, consistent set of files.
-function buildHash() {
-  const h = crypto.createHash('sha256');
-  const walk = (dir) => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p);
-      else { h.update(path.relative(PUBLIC_DIR, p)); h.update(fs.readFileSync(p)); }
-    }
-  };
-  walk(PUBLIC_DIR);
-  return h.digest('hex').slice(0, 16);
-}
-
+// The service worker gets a hash of all app files (see tools/buildhash.mjs), so installed
+// phones pick up a new version the next time they can reach the laptop, and always get a
+// complete, consistent set of files.
 function serveServiceWorker(res) {
-  const src = fs.readFileSync(path.join(PUBLIC_DIR, 'sw.js'), 'utf8').replace("'__BUILD_HASH__'", `'${buildHash()}'`);
+  const src = serviceWorkerSource(PUBLIC_DIR);
   res.writeHead(200, { 'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache' });
   res.end(src);
 }

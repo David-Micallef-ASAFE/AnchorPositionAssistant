@@ -8,9 +8,10 @@ import { imageSize, isTooLarge, shrinkImage, MAX_EDGE } from './imageprep.js';
 // ======================================================================
 // Mode: laptop web app (server storage) or phone app (on-device storage)
 // ======================================================================
-// The same files are served at "/" (laptop, data on the server) and "/app/" (phone app:
-// installable, works offline, data stored on the device).
-const LOCAL_MODE = location.pathname.startsWith('/app/');
+// The same files are served at "/" (laptop, data on the server) and ".../app/" (phone app:
+// installable, works offline, data stored on the device). ".../app/" is "/app/" from the local
+// server and "/AnchorPositionAssistant/app/" on GitHub Pages.
+const LOCAL_MODE = /\/app\/(index\.html)?$/.test(location.pathname);
 const store = LOCAL_MODE ? createLocalStore() : createServerStore();
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 const TAP = TOUCH ? 'Tap' : 'Click';

@@ -2,12 +2,16 @@
   "name": "anchor-position-assistant",
   "version": "1.0.0",
   "private": true,
-  "description": "Local tool to place UWB/RTLS anchors on floor plans and trilaterate approximate anchors from tape/laser measurements.",
+  "description": "Place anchors on floor plans and calculate the position of approximate anchors from tape/laser measurements.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
     "phone": "adb reverse tcp:3000 tcp:3000",
     "icons": "node tools/make-icons.mjs",
-    "test": "node --test test/"
+    "build:pages": "node tools/build-pages.mjs",
+    "test": "node --test \"test/**/*.test.js\""
   }
 }

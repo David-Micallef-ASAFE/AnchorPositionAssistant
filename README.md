@@ -1,9 +1,32 @@
 # Anchor Position Assistant
 
-A local web app that helps you place anchors on a floor plan during installation and calculate
+A web app that helps you place anchors on a floor plan during installation and calculate
 the position of anchors that can't be placed by eye, using distances measured with a tape or laser.
 
-## Run
+**Phone / tablet app (hosted, works offline):** https://david-micallef-asafe.github.io/AnchorPositionAssistant/app/
+
+## Phone and tablet: install from GitHub Pages (recommended)
+
+1. Open **https://david-micallef-asafe.github.io/AnchorPositionAssistant/app/** on the phone.
+2. Install it:
+   - **Android (Chrome):** ⋮ menu → **Install app** (or **Add to Home screen**).
+   - **iPhone / iPad (Safari):** **Share** → **Add to Home Screen**.
+3. Open it from the home screen. Once it has opened, it works without any connection.
+
+There is no cable, adb or developer mode involved. When the phone is online, the app picks up new versions by itself
+and shows "The app was updated". Close and reopen the app to use the new version.
+
+**Your data stays on the device.** The site only delivers the app; floor plans, images and anchors are stored on the phone
+and are never uploaded. The app's code is public; the data is not.
+- **The phone holds the only copy.** Uninstalling the app or clearing the browser's site data deletes it,
+  so use **Backup** regularly. A backup file can be imported on another phone or on the laptop version.
+- **Moving from the USB-installed app** (`http://localhost:3000/app/`): its data stays with that address.
+  **Backup** each plan there, then **Import plan** in the GitHub-hosted app.
+
+The site is published automatically by GitHub Actions (`.github/workflows/pages.yml`) on every push to `main`:
+it runs the tests, then `npm run build:pages` builds the static site into `dist/`.
+
+## Laptop: run locally
 
 Requires Node.js 22 or later. There are no npm dependencies.
 
@@ -21,7 +44,8 @@ Set `DATA_DIR=<folder>` to keep the data somewhere else.
 | Address | Who uses it | Where the data lives |
 |---|---|---|
 | `http://localhost:3000/` | The laptop web app | On the laptop, in `data/` |
-| `http://localhost:3000/app/` | The phone app (Android). It is installable and works offline | On the phone only |
+| `http://localhost:3000/app/` | The phone app served by the laptop (Android, over USB). It is installable and works offline | On the phone only |
+| `https://david-micallef-asafe.github.io/AnchorPositionAssistant/app/` | The same phone app, hosted on GitHub Pages (Android and iPhone) | On the phone only |
 
 Both versions have the same features. On a touch screen the app also shows a crosshair for precise placement,
 nudge buttons and larger touch targets.
@@ -36,8 +60,9 @@ or the **Anchors** panel. A tab bar at the bottom switches between them, and the
 
 Wider screens (laptops, larger tablets) show the map and the panel side by side.
 
-## Installing the phone app (Android, one time per phone)
+## Alternative: install the phone app from the laptop over USB (Android)
 
+Use this when you want the phone app without GitHub, for example to try local changes before pushing them.
 Chrome only installs offline apps from a secure address, and `http://localhost` counts as one.
 The phone reaches the laptop's `localhost` over a USB cable, so no certificates are needed.
 
