@@ -16,6 +16,8 @@ const FILES = [
   'planfile.js',
   'imageprep.js',
   'trilateration.js',
+  'geometry.js',
+  'config.js',
   'qr-scanner.js',
   'serial.js',
   'exporters.js',

@@ -1,4 +1,6 @@
 import { solvePosition } from './trilateration.js';
+import { checkGeometry } from './geometry.js';
+import { CALCULATION_RULES } from './config.js';
 import { scanSerial } from './qr-scanner.js';
 import { buildCsv, buildSql, isExported, sortAnchors } from './exporters.js';
 import { createServerStore, createLocalStore } from './store.js';
@@ -678,13 +680,23 @@ function filteredAnchors() {
   return sortAnchors(anchors().filter((a) => !f || a.serial.toLowerCase().includes(f)));
 }
 
+// Approximate anchors: a tick when the position was calculated from measurements (and passed the
+// calculation rules) and has not been moved by hand since.
+function calcMarkHtml(a) {
+  if (a.type !== 'approximate') return '';
+  return a.calculated === true
+    ? '<span class="calc-mark yes" title="Position calculated from measurements">✓</span>'
+    : '<span class="calc-mark no" title="Position not calculated: placed by hand">?</span>';
+}
+
 function renderAnchorTable() {
+  hideCalcInfo();
   const f = state.anchorFilter.trim().toLowerCase();
   const list = filteredAnchors();
   $('#anchor-rows').innerHTML = list.map((a) => `
     <tr class="clickable ${a.id === state.selectedId ? 'selected' : ''}" data-select="${a.id}">
       <td><strong>${esc(a.serial)}</strong></td>
-      <td><span class="badge ${a.type}">${a.type === 'reference' ? 'Ref' : 'Approx'}</span></td>
+      <td class="nowrap"><span class="badge ${a.type}">${a.type === 'reference' ? 'Ref' : 'Approx'}</span>${calcMarkHtml(a)}</td>
       <td class="num" data-live-x="${a.id}">${fmt(a.x)}</td>
       <td class="num" data-live-y="${a.id}">${fmt(a.y)}</td>
       <td class="center"><input type="checkbox" data-export="${a.id}" ${isExported(a) ? 'checked' : ''} title="Include in CSV / SQL export"/></td>
@@ -700,6 +712,60 @@ function renderAnchorTable() {
   empty.hidden = list.length > 0;
   empty.textContent = f && anchors().length ? 'No anchors match your search.' : 'No anchors yet. Add one above, then move its pin to where it is installed.';
 }
+
+// ---------- info box on hover: the logged metrics of a calculated approximate anchor ----------
+const calcInfo = document.createElement('div');
+calcInfo.className = 'calc-info';
+calcInfo.hidden = true;
+document.body.appendChild(calcInfo);
+
+function calcInfoHtml(a) {
+  const ls = a.lastSolve;
+  const R = CALCULATION_RULES;
+  const row = (label, value, limit = '') => `<tr><th>${label}</th><td>${value}</td><td class="muted">${limit}</td></tr>`;
+  const num = (v, d) => (Number.isFinite(v) ? fmt(v, d) : '–');
+  const n = Number.isInteger(ls.n) ? ls.n : '–';
+  const refs = Number.isInteger(ls.references) ? ls.references : '–';
+  return `<div class="calc-info-title">✓ ${esc(a.serial)}: position calculated</div>
+    <div class="muted small">${new Date(ls.at).toLocaleString()}</div>
+    <table>
+      ${row('RMS residual', `<span class="${residClass(ls.rms)}">${num(ls.rms, 3)} m</span>`)}
+      ${row('Max residual', Number.isFinite(ls.maxResidual) ? `<span class="${residClass(ls.maxResidual)}">${num(ls.maxResidual, 3)} m</span>` : '–')}
+      ${row('Anchors used', n, `min ${R.minAnchors}`)}
+      ${row('Reference anchors', refs)}
+      ${row('Effective anchor count', num(ls.effectiveAnchors, 2), `min ${R.minEffectiveAnchors}`)}
+      ${row('HDOP', num(ls.hdop, 2), `max ${R.maxHdop}`)}
+    </table>`;
+}
+
+function hideCalcInfo() { calcInfo.hidden = true; calcInfo.dataset.for = ''; }
+
+$('#anchor-rows').addEventListener('mouseover', (e) => {
+  const tr = e.target.closest('[data-select]');
+  const a = tr && byId(tr.dataset.select);
+  if (!a || a.type !== 'approximate' || a.calculated !== true || !a.lastSolve) { hideCalcInfo(); return; }
+  if (calcInfo.dataset.for === a.id && !calcInfo.hidden) return;
+  calcInfo.innerHTML = calcInfoHtml(a);
+  calcInfo.dataset.for = a.id;
+  calcInfo.hidden = false;
+  // To the left of the row (over the map) when there is room, otherwise below or above it.
+  const r = tr.getBoundingClientRect();
+  const w = calcInfo.offsetWidth, h = calcInfo.offsetHeight;
+  const W = window.innerWidth, H = window.innerHeight;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+  let left, top;
+  if (r.left - w - 8 >= 8) {
+    left = r.left - w - 8;
+    top = clamp(r.top, 8, H - h - 8);
+  } else {
+    left = clamp(r.left + 24, 8, W - w - 8);
+    top = r.bottom + 4 + h <= H - 8 ? r.bottom + 4 : Math.max(8, r.top - h - 4);
+  }
+  calcInfo.style.left = `${left}px`;
+  calcInfo.style.top = `${top}px`;
+});
+$('#anchor-rows').addEventListener('mouseleave', hideCalcInfo);
+window.addEventListener('scroll', hideCalcInfo, true);
 
 $('#anchor-search').addEventListener('input', (e) => { state.anchorFilter = e.target.value; renderAnchorTable(); });
 
@@ -859,7 +925,10 @@ function finishPlace() {
   state.placeMode = null;
   const a = byId(pm.id);
   renderAll();
-  if (a) patchAnchor(a, { x: a.x, y: a.y }).then((ok) => ok && toast(`Position of ${a.serial} saved`));
+  if (a) {
+    const moved = a.x !== pm.orig.x || a.y !== pm.orig.y;
+    patchAnchor(a, moved ? movedByHand(a) : { x: a.x, y: a.y }).then((ok) => ok && toast(`Position of ${a.serial} saved`));
+  }
   return pm;
 }
 
@@ -972,18 +1041,29 @@ function renderSelected() {
 
   if (a.type === 'approximate') {
     html += `<h4>Measured distances (tape / laser)</h4>
-      <p class="hint" style="margin-top:0">Press <em>+ Add measurement</em>, ${TAP.toLowerCase()} the anchor you measured to on the plan, then type the horizontal distance in meters. Press Enter to save it and pick the next anchor. Three or more references that are not in a line give the best result.</p>`;
+      <p class="hint" style="margin-top:0">Press <em>+ Add measurement</em>, ${TAP.toLowerCase()} the anchor you measured to on the plan, then type the horizontal distance in meters. Press Enter to save it and pick the next anchor. At least ${CALCULATION_RULES.minAnchors} anchors are needed, spread around this one rather than all on one side.</p>`;
     if (a.measurements.length) {
       html += `<div class="table-x"><table class="table compact meas-table"><thead><tr><th>To anchor</th><th class="num">Measured</th><th class="num">On plan</th><th class="num">Residual</th><th></th></tr></thead>
         <tbody>${measurementRowsHtml(a)}</tbody></table></div>`;
     }
     const pickLabel = TOUCH ? 'Tap an anchor… (tap here to cancel)' : 'Click an anchor… (Esc to cancel)';
+    const measured = measuredRows(a).rows.length;
+    const enough = measured >= CALCULATION_RULES.minAnchors;
     html += `<div class="btn-row">
         <button data-action="add-meas" class="${state.pickMode ? 'active' : ''}" ${anchors().length < 2 ? 'disabled' : ''}>${state.pickMode ? pickLabel : '+ Add measurement'}</button>
-        <button class="primary" data-action="solve" ${a.measurements.length ? '' : 'disabled'}>Calculate position</button>
+        <button class="primary" data-action="solve" ${enough ? '' : 'disabled'}>Calculate position</button>
       </div>`;
+    if (!enough) {
+      html += `<p class="hint">Distances entered to ${measured} of the ${CALCULATION_RULES.minAnchors} anchors needed before the position can be calculated.</p>`;
+    }
+    html += a.calculated === true
+      ? '<p class="calc-status yes">✓ Position calculated from measurements</p>'
+      : `<p class="calc-status no">Position not calculated${a.lastSolve ? ' – moved by hand since the last calculation' : ' yet'}</p>`;
     if (a.lastSolve) {
-      html += `<p class="hint">Last calculated ${new Date(a.lastSolve.at).toLocaleString()} from ${a.lastSolve.n} measurement(s), RMS ${fmt(a.lastSolve.rms, 3)} m.</p>`;
+      const ls = a.lastSolve;
+      const refs = Number.isInteger(ls.references) ? ` (${ls.references} reference)` : '';
+      const geo = Number.isFinite(ls.effectiveAnchors) ? `, effective anchors ${fmt(ls.effectiveAnchors, 2)}, HDOP ${fmt(ls.hdop, 2)}` : '';
+      html += `<p class="hint">Last calculated ${new Date(ls.at).toLocaleString()} from ${ls.n} anchor(s)${refs}, RMS ${fmt(ls.rms, 3)} m${geo}.</p>`;
     }
     html += solveResultHtml(a);
   }
@@ -998,17 +1078,24 @@ function solveResultHtml(a) {
   const shift = dist(a, r);
   const warnings = [];
   if (r.underdetermined) warnings.push('Only one reference distance: the pin was moved along the line towards its current position. The direction is not determined – add more measurements.');
-  else if (r.ambiguous) warnings.push('Only two distinct references (or all references in one line): there are two mirror-image solutions. The one nearest the current pin was chosen, so make sure the pin was roughly in the right place – or add a reference that is not on the same line.');
+  else if (r.ambiguous) warnings.push('All measured anchors are in one line: there are two mirror-image solutions. The one nearest the current pin was chosen, so make sure the pin was roughly in the right place – or add an anchor that is not on the same line.');
   if (r.rms > 0.1) warnings.push('Large residuals – check for a mistyped distance, a wrongly placed reference anchor, an obstructed measurement, or a big height difference between anchors.');
   if (state.solve.usesApprox) warnings.push('Some measurements are to approximate anchors; errors in their positions carry over.');
   if (r.x < 0 || r.y < 0 || r.x > state.plan.width || r.y > state.plan.height) warnings.push('The calculated position is outside the floor plan.');
-  return `<div class="result-box">
-      <div>Calculated position</div>
+  const g = state.solve.geometry;
+  const rules = CALCULATION_RULES;
+  const nCls = g.effectiveAnchors >= rules.minEffectiveAnchors ? 'resid-ok' : 'resid-bad';
+  const hCls = g.hdop <= rules.maxHdop ? 'resid-ok' : 'resid-bad';
+  const hTxt = Number.isFinite(g.hdop) ? fmt(g.hdop, 2) : '∞';
+  return `<div class="result-box${g.ok ? '' : ' rejected'}">
+      <div>Calculated position${g.ok ? '' : ' – <strong class="resid-bad">cannot be applied</strong>'}</div>
       <div class="big">X ${fmt(r.x, 3)} m, Y ${fmt(r.y, 3)} m</div>
       <div class="small">Moves the pin ${fmt(shift, 3)} m · RMS residual <span class="${residClass(r.rms)}">${fmt(r.rms, 3)} m</span> · max ${fmt(r.maxAbsResidual, 3)} m · ${state.solve.rows.length} measurement(s)</div>
+      <div class="small">Geometry: effective anchors <span class="${nCls}">${fmt(g.effectiveAnchors, 2)}</span> (min ${rules.minEffectiveAnchors}) · HDOP <span class="${hCls}">${hTxt}</span> (max ${rules.maxHdop})</div>
+      ${g.problems.map((p) => `<div class="warn-box bad">${esc(p)}</div>`).join('')}
       ${warnings.map((w) => `<div class="warn-box">${esc(w)}</div>`).join('')}
       <div class="btn-row">
-        <button class="primary" data-action="apply-solve">Apply position</button>
+        <button class="primary" data-action="apply-solve" ${g.ok ? '' : 'disabled'}>Apply position</button>
         <button data-action="show-solve">Show on map</button>
         <button data-action="discard-solve">Discard</button>
       </div>
@@ -1051,11 +1138,24 @@ async function patchAnchor(a, fields) {
     return true;
   } catch (err) { handleError(err); return false; }
 }
+// Fields to save after the user moved an anchor by hand. A hand-placed position is no longer the
+// calculated one, so the "calculated" mark is cleared.
+function movedByHand(a) {
+  const fields = { x: a.x, y: a.y };
+  if (a.calculated) {
+    a.calculated = false;
+    fields.calculated = false;
+    renderAnchorTable();
+    if (a.id === state.selectedId) renderSelected();
+  }
+  return fields;
+}
+
 const savePositionDebounced = (() => {
   const timers = new Map();
   return (a) => {
     clearTimeout(timers.get(a.id));
-    timers.set(a.id, setTimeout(() => { timers.delete(a.id); patchAnchor(a, { x: a.x, y: a.y }); }, 300));
+    timers.set(a.id, setTimeout(() => { timers.delete(a.id); patchAnchor(a, movedByHand(a)); }, 300));
   };
 })();
 const saveMeasurements = (a) => patchAnchor(a, { measurements: a.measurements });
@@ -1127,13 +1227,23 @@ panel.addEventListener('click', async (e) => {
     case 'solve': runSolve(a); return;
     case 'apply-solve': {
       const r = state.solve?.result;
-      if (!r || r.error) return;
+      if (!r || r.error || !state.solve.geometry?.ok) return;
       cancelPlace();
       a.x = r.x; a.y = r.y;
-      a.lastSolve = { at: new Date().toISOString(), rms: r.rms, n: state.solve.rows.length };
+      const g = state.solve.geometry;
+      a.lastSolve = {
+        at: new Date().toISOString(),
+        rms: r.rms,
+        maxResidual: r.maxAbsResidual,
+        n: state.solve.rows.length,
+        references: state.solve.rows.filter((row) => row.reference).length,
+        effectiveAnchors: g.effectiveAnchors,
+        hdop: g.hdop,
+      };
+      a.calculated = true;
       state.solve = null;
       renderAll();
-      if (await patchAnchor(a, { x: a.x, y: a.y, lastSolve: a.lastSolve })) toast(`Anchor ${a.serial} moved to the calculated position`);
+      if (await patchAnchor(a, { x: a.x, y: a.y, lastSolve: a.lastSolve, calculated: true })) toast(`Anchor ${a.serial} moved to the calculated position`);
       return;
     }
     case 'discard-solve': state.solve = null; break;
@@ -1165,18 +1275,32 @@ function pickMeasurementTarget(target) {
   input?.scrollIntoView({ block: 'center' });
 }
 
-function runSolve(a) {
+// The measurements of anchor a that can be used: the target still exists and a distance is entered.
+function measuredRows(a) {
   const rows = [];
   let usesApprox = false;
   for (const m of a.measurements) {
     const t = byId(m.toAnchorId);
     if (!t || !Number.isFinite(m.distance)) continue;
     if (t.type !== 'reference') usesApprox = true;
-    rows.push({ mid: m.id, x: t.x, y: t.y, distance: m.distance });
+    rows.push({ mid: m.id, x: t.x, y: t.y, distance: m.distance, reference: t.type === 'reference' });
   }
-  const result = rows.length ? solvePosition(rows, { x: a.x, y: a.y }) : { error: 'Enter at least one distance to another anchor.' };
-  if (!result.error) rows.forEach((row, i) => (row.residual = result.residuals[i]));
-  state.solve = { anchorId: a.id, result, rows, usesApprox };
+  return { rows, usesApprox };
+}
+
+function runSolve(a) {
+  const { rows, usesApprox } = measuredRows(a);
+  if (rows.length < CALCULATION_RULES.minAnchors) {
+    toast(`Enter distances to at least ${CALCULATION_RULES.minAnchors} anchors first`, true);
+    return;
+  }
+  const result = solvePosition(rows, { x: a.x, y: a.y });
+  let geometry = null;
+  if (!result.error) {
+    rows.forEach((row, i) => (row.residual = result.residuals[i]));
+    geometry = checkGeometry(result, rows, CALCULATION_RULES);
+  }
+  state.solve = { anchorId: a.id, result, rows, usesApprox, geometry };
   renderAll();
 }
 

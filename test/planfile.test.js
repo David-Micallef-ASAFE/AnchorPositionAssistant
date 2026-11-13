@@ -51,6 +51,7 @@ test('plan file round trip keeps plan, anchors, flags and measurements', async (
   await src.updateAnchor(ap.id, {
     measurements: [{ toAnchorId: r1.id, distance: 10.5 }, { toAnchorId: r2.id, distance: null }],
     lastSolve: { at: '2026-11-13T09:00:00Z', rms: 0.02, n: 2 },
+    calculated: true,
   });
 
   const { json } = await exportPlanFile(src, plan.id);
@@ -66,6 +67,8 @@ test('plan file round trip keeps plan, anchors, flags and measurements', async (
   assert.equal(bySerial['222'].export, false);
   assert.equal(bySerial['111'].export, true);
   assert.equal(bySerial['333'].type, 'approximate');
+  assert.equal(bySerial['333'].calculated, true);
+  assert.notEqual(bySerial['111'].calculated, true);
   assert.deepEqual(bySerial['333'].lastSolve, { at: '2026-11-13T09:00:00Z', rms: 0.02, n: 2 });
   // measurements now point at the new ids
   const ms = bySerial['333'].measurements;

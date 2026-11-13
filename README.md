@@ -130,15 +130,24 @@ This is why the USB method is recommended.
    Under *Measured distances*, press **+ Add measurement**, then **click the anchor you measured to**, either on the plan or in the anchor table.
    Type the distance in meters and press **Enter** to save it and pick the next anchor. Esc cancels picking.
    Hover over a measurement row to highlight its anchor on the plan.
-   Dashed circles show each measured distance. Press **Calculate position** to preview the result.
-   The result shows the per-measurement residuals and any warnings. Then press **Apply position**.
+   Dashed circles show each measured distance. Once distances to **at least 3 anchors** are entered,
+   press **Calculate position** to preview the result.
+   The result shows the per-measurement residuals, the geometry check and any warnings. Then press **Apply position**.
    The anchor stays *Approximate*.
+   **Apply position is blocked when the geometry is poor** (see *Calculation rules* below). The result then
+   explains why: add a measurement to an anchor on the empty side, or at a different angle, and calculate again.
+   **Calculated mark:** in the anchor table, an approximate anchor shows a green **✓** once a calculated position has been applied,
+   and a grey **?** while its pin was only placed by hand. Moving the pin by hand afterwards (dragging, nudging, typing X/Y or
+   *Place with crosshair*) clears the ✓, so a ✓ always means the position on the plan is the calculated one.
+   The mark is included in backups and in the CSV export (*Position calculated*: Yes/No).
 4. **Check positions**: select any anchor and press **Show measurements** to see its distance to every other anchor on the plan.
    **Measure to point** gives the distance from the anchor to any spot you click, such as a wall.
 
 5. **Export**: the **Export** checkbox column in the anchor table chooses which anchors are exported. It is ticked by default,
    and the header checkbox ticks or unticks all listed anchors. Next to *Anchors* there are two export buttons:
-   - **Export CSV**: one row per anchor with the floor plan, serial, type, X/Y (m), number of measurements, last calculation time and RMS residual.
+   - **Export CSV**: one row per anchor with the floor plan, serial, type, X/Y (m), position calculated (Yes/No, approximate anchors only),
+     number of measurements, and the metrics logged with the last applied calculation: time, RMS and max residual,
+     anchors used, reference anchors used, effective anchor count and HDOP.
    - **Export SQL**: one statement per anchor, ready to run against the device database:
      `update device set space_coordinates=(10,25.3) where serial_number='123456';`
      Coordinates are in meters, rounded to the millimeter, with no trailing zeros.
@@ -146,12 +155,37 @@ This is why the USB method is recommended.
    The file contains the image, the anchors with their export ticks and the measurements. **Import plan** loads such a file as a new plan.
    This works in both versions, so you can move a plan from the phone to the laptop or the other way.
 
+## Calculation rules
+
+Three rules stop a poor position from being applied. Their values are in [`public/config.js`](public/config.js)
+(`CALCULATION_RULES`). The current values are provisional defaults.
+
+| Rule | Default | Why |
+|---|---|---|
+| `minAnchors`: distances to at least this many anchors before *Calculate position* is enabled | 3 | With two distances, a mistyped one still gives a position with no warning. With three or more, it shows up as a large residual. |
+| `minEffectiveAnchors`: effective anchor count N of the calculated position, at least | 2.5 | How well the measured anchors surround the position (Edge TDOA Solver Requirements, 7.2). |
+| `maxHdop`: horizontal dilution of precision of the calculated position, at most | 2.0 | How much the geometry amplifies a measuring error into a position error (7.3). |
+
+Both geometry metrics use the directions (azimuths, 7.1) from the calculated position to the measured anchors.
+
+- **Effective anchor count N** = 1 / Σ (gap / 360°)², where the gaps are the angles between neighbouring anchor
+  directions, including the wrap-around. Three evenly spaced anchors give 3.0, anchors at 0°, 90° and 180° give 2.67,
+  and anchors bunched on one side give less than 2.
+- **HDOP** = √trace((HᵀH)⁻¹), where H holds the unit vectors to the anchors. Position error ≈ HDOP × measuring error.
+  About 1 is excellent: three evenly spaced anchors give 1.15, four give 1.00. It grows quickly when the anchors line up.
+  The app measures distances directly, so this is the range-based HDOP. For evenly spaced anchors it equals the TDoA values in the
+  requirements document; for uneven layouts it is a little lower, because a tape measurement has no shared time offset.
+
+Each applied calculation logs its RMS residual, max residual, number of anchors used (and how many of them are references),
+effective anchor count and HDOP. They are shown under *Last calculated*, in an info box when you hover over a calculated
+approximate anchor (✓) in the anchor table, and in the CSV export.
+
 ## Notes on the calculation
 
 - 2D non-linear least squares (Levenberg–Marquardt) that uses every distance you enter.
   It starts from the pin's current position, so the pin's rough location picks the correct mirror solution when the geometry is ambiguous.
-- With 3 or more references that are not in a line, the solution is unique. With 2 references, or with all references in a line,
-  there are two mirror solutions and the one nearest the pin is used. With 1 reference, the pin only moves along the line to that reference.
+- With 3 or more anchors that are not in a line, the solution is unique. If all the measured anchors are in one line,
+  there are two mirror solutions and the one nearest the pin is used (a warning is shown).
 - Distances are treated as horizontal. If two anchors are mounted at very different heights, enter the horizontal distance:
   `sqrt(measured² − heightDiff²)`.
 - Residuals: green < 5 cm, amber < 15 cm, red ≥ 15 cm. A large residual usually means a mistyped distance or a misplaced reference.

@@ -42,6 +42,10 @@ export function validateAnchorFields(body, partial) {
     out.measurements = ms;
   }
   if ('lastSolve' in body) out.lastSolve = body.lastSolve ?? null;
+  if ('calculated' in body) {
+    if (typeof body.calculated !== 'boolean') return { error: 'calculated must be true or false' };
+    out.calculated = body.calculated;
+  }
   if ('export' in body) {
     if (typeof body.export !== 'boolean') return { error: 'export must be true or false' };
     out.export = body.export;

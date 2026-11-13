@@ -23,6 +23,7 @@ export async function exportPlanFile(store, planId) {
       x: a.x,
       y: a.y,
       export: a.export !== false,
+      calculated: a.calculated === true,
       lastSolve: a.lastSolve ?? null,
       measurements: (a.measurements || [])
         .filter((m) => serialOf.has(m.toAnchorId))
@@ -68,7 +69,7 @@ export async function importPlanFile(store, text, { name, prepareImage } = {}) {
     const idBySerial = new Map();
     for (const a of data.anchors) {
       const created = await store.createAnchor(plan.id, {
-        serial: a.serial, type: a.type, x: a.x, y: a.y, export: a.export !== false,
+        serial: a.serial, type: a.type, x: a.x, y: a.y, export: a.export !== false, calculated: a.calculated === true,
       });
       idBySerial.set(created.serial, created.id);
       if (a.lastSolve) await store.updateAnchor(created.id, { lastSolve: a.lastSolve });
