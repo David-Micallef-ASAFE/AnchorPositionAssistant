@@ -91,7 +91,19 @@ form label input { color: var(--text); font-size: 14px; }
 .viewer { position: absolute; inset: 0; background: #e5e7eb; overflow: hidden; touch-action: none; cursor: grab; }
 .viewer.panning { cursor: grabbing; }
 .viewer.measuring { cursor: crosshair; }
-#plan-svg { width: 100%; height: 100%; display: block; user-select: none; }
+#plan-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; }
+#plan-img {
+  position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; max-height: none;
+  pointer-events: none; user-select: none; -webkit-user-drag: none;
+}
+/* While zooming/panning, keep the image on its own GPU layer: the frame is just re-composited. */
+.viewer.moving #plan-img { will-change: transform; }
+.image-notice {
+  position: absolute; top: 60px; left: 10px; right: 10px; margin: 0 auto; max-width: 520px; z-index: 5;
+  background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px; padding: 10px 12px; font-size: 13px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.15);
+}
+.image-notice .btn-row { margin-top: 8px; }
 #plan-border { stroke: #475569; stroke-width: 1; }
 .viewer-toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 4px; align-items: center; background: rgba(255,255,255,.92); padding: 4px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
 .viewer-toolbar button { min-width: 34px; }

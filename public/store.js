@@ -4,6 +4,7 @@
 //   getPlan(id)                     -> { ...plan, imageUrl, anchors: [...] }
 //   createPlan({ name, width, height, image: Blob })  -> plan
 //   deletePlan(id)
+//   replacePlanImage(id, image: Blob) -> plan (with the new imageUrl)
 //   createAnchor(planId, fields)    -> anchor
 //   updateAnchor(id, fields)        -> anchor
 //   deleteAnchor(id)                (also removes measurements that point to it)
@@ -49,6 +50,10 @@ export function createServerStore() {
       return withUrl(await api('POST', '/api/floorplans', { name, width, height, image: await blobToDataUrl(image) }));
     },
     deletePlan: (id) => api('DELETE', '/api/floorplans/' + encodeURIComponent(id)),
+    async replacePlanImage(id, image) {
+      if (!isImageType(image?.type)) throw new Error('Image must be a PNG or JPEG');
+      return withUrl(await api('PUT', `/api/floorplans/${encodeURIComponent(id)}/image`, { image: await blobToDataUrl(image) }));
+    },
     createAnchor: (planId, fields) => api('POST', `/api/floorplans/${encodeURIComponent(planId)}/anchors`, fields),
     updateAnchor: (id, fields) => api('PATCH', '/api/anchors/' + encodeURIComponent(id), fields),
     deleteAnchor: (id) => api('DELETE', '/api/anchors/' + encodeURIComponent(id)),
@@ -175,6 +180,21 @@ export function createLocalStore() {
       });
       dropUrl(id);
       return null;
+    },
+
+    async replacePlanImage(id, image) {
+      if (!isImageType(image?.type)) throw new HttpLikeError('Image must be a PNG or JPEG');
+      const blob = new Blob([await image.arrayBuffer()], { type: image.type });
+      const plan = await tx(dbP, ['floorplans', 'images'], 'readwrite', async (s) => {
+        const p = await reqP(s.floorplans.get(id));
+        if (!p) throw new HttpLikeError('Floor plan not found');
+        Object.assign(p, { imageType: image.type, updatedAt: now() });
+        s.floorplans.put(p);
+        s.images.put(blob, id);
+        return p;
+      });
+      dropUrl(id);
+      return { ...plan, imageUrl: await imageUrlFor(id) };
     },
 
     async createAnchor(planId, fields) {

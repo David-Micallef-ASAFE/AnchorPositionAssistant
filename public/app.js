@@ -3,6 +3,7 @@ import { scanSerial } from './qr-scanner.js';
 import { buildCsv, buildSql, isExported, sortAnchors } from './exporters.js';
 import { createServerStore, createLocalStore } from './store.js';
 import { exportPlanFile, importPlanFile, PLAN_FILE_EXT } from './planfile.js';
+import { imageSize, isTooLarge, shrinkImage, MAX_EDGE } from './imageprep.js';
 
 // ======================================================================
 // Mode: laptop web app (server storage) or phone app (on-device storage)
@@ -164,7 +165,7 @@ $('#import-file').addEventListener('change', async (e) => {
   try { text = await file.text(); }
   catch (err) { console.error(err); toast('Could not read this file. Save it to the phone first (e.g. Downloads) and pick it from there.', true); return; }
   try {
-    const plan = await importPlanFile(store, text);
+    const plan = await importPlanFile(store, text, { prepareImage: prepareLargeImage });
     toast(`Imported "${plan.name}"`);
     location.hash = '#/plan/' + plan.id;
   } catch (err) { handleError(err); }
@@ -172,16 +173,20 @@ $('#import-file').addEventListener('change', async (e) => {
 
 // --- upload form ---
 const uploadForm = $('#upload-form');
-let uploadImg = null; // { file, w, h }
+let uploadImg = null; // { file, w, h, orig: { width, height } | null }
 let previewUrl = null;
+let preparingUpload = false;
 
 function updateUploadHint() {
   const hint = $('#upload-hint');
   if (!uploadImg) { hint.innerHTML = ''; return; }
-  const ratio = uploadImg.h / uploadImg.w;
+  // Aspect ratio of the original image (a reduced copy can differ by a rounding pixel).
+  const ratio = uploadImg.orig ? uploadImg.orig.height / uploadImg.orig.width : uploadImg.h / uploadImg.w;
   const W = parseFloat(uploadForm.width.value);
   const H = parseFloat(uploadForm.height.value);
-  let html = `Image: ${uploadImg.w} × ${uploadImg.h} px.`;
+  let html = uploadImg.orig
+    ? `Image: ${uploadImg.orig.width} × ${uploadImg.orig.height} px, reduced to ${uploadImg.w} × ${uploadImg.h} px so zooming stays smooth.`
+    : `Image: ${uploadImg.w} × ${uploadImg.h} px.`;
   if (W > 0 && !(H > 0)) {
     html += ` Matching height: <button type="button" class="link" data-set-height="${(W * ratio).toFixed(3)}">${(W * ratio).toFixed(3)} m</button>`;
   } else if (H > 0 && !(W > 0)) {
@@ -224,17 +229,45 @@ uploadForm.image.addEventListener('change', async () => {
   }
   const type = sniffImageType(bytes);
   if (!type) { toast('Please choose a PNG or JPEG image', true); uploadForm.image.value = ''; return; }
-  const blob = new Blob([bytes], { type });
+  let blob = new Blob([bytes], { type });
+  const size = imageSize(bytes);
+  let orig = null;
+  if (size && isTooLarge(size.width, size.height)) {
+    // Huge CAD exports make zooming crawl: reduce them now (positions are in meters, so nothing else changes).
+    preparingUpload = true;
+    $('#upload-preview').hidden = false;
+    $('#upload-preview img').removeAttribute('src');
+    $('#upload-hint').textContent = `Image is ${size.width} × ${size.height} px – reducing it so zooming stays smooth…`;
+    try {
+      const r = await shrinkImage(blob, size.width, size.height);
+      blob = r.blob;
+      orig = size;
+    } catch (err) {
+      handleError(err);
+      uploadForm.image.value = '';
+      $('#upload-preview').hidden = true;
+      return;
+    } finally { preparingUpload = false; }
+    if (uploadForm.image.files[0] !== file) return; // another file was picked meanwhile
+  }
   previewUrl = URL.createObjectURL(blob);
   const img = $('#upload-preview img');
   img.onload = () => {
-    uploadImg = { file: blob, w: img.naturalWidth, h: img.naturalHeight };
+    uploadImg = { file: blob, w: img.naturalWidth, h: img.naturalHeight, orig };
     $('#upload-preview').hidden = false;
     if (!uploadForm.name.value) uploadForm.name.value = file.name.replace(/\.[^.]+$/, '');
     updateUploadHint();
   };
   img.src = previewUrl;
 });
+
+// Shrink an oversized image blob (used when importing plan files). Returns the blob to store.
+async function prepareLargeImage(blob) {
+  const size = imageSize(new Uint8Array(await blob.slice(0, 256 * 1024).arrayBuffer()));
+  if (!size || !isTooLarge(size.width, size.height)) return blob;
+  toast(`Reducing the ${size.width} × ${size.height} px image so zooming stays smooth…`);
+  return (await shrinkImage(blob, size.width, size.height)).blob;
+}
 uploadForm.width.addEventListener('input', updateUploadHint);
 uploadForm.height.addEventListener('input', updateUploadHint);
 $('#upload-hint').addEventListener('click', (e) => {
@@ -247,6 +280,7 @@ $('#upload-hint').addEventListener('click', (e) => {
 
 uploadForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (preparingUpload) { toast('Still preparing the image – one moment…'); return; }
   if (!uploadImg) { toast('Choose an image first', true); return; }
   const btn = uploadForm.querySelector('button[type=submit]');
   btn.disabled = true;
@@ -357,10 +391,64 @@ async function openPlan(id) {
   showScreen('map');
   $('#topbar-context').innerHTML = `<a href="#/" class="back-link">← <span class="hide-narrow">All floor plans</span></a>
     <strong class="plan-title">${esc(plan.name)}</strong><span class="hide-narrow">${fmt(plan.width)} × ${fmt(plan.height)} m</span>`;
-  $('#plan-image').setAttribute('href', plan.imageUrl);
+  loadPlanImage(plan.imageUrl);
   fitView();
   renderAll();
 }
+
+// ---------- plan image ----------
+const planImg = $('#plan-img');
+let imageNoticeDismissed = new Set(); // plan ids where "Not now" was chosen this session
+
+function loadPlanImage(url) {
+  planImg.style.visibility = 'hidden';
+  $('#image-notice').hidden = true;
+  planImg.onload = () => {
+    // The image keeps its natural pixel size; renderPlan() scales it into place with a CSS transform.
+    planImg.style.width = planImg.naturalWidth + 'px';
+    planImg.style.height = planImg.naturalHeight + 'px';
+    planImg.style.visibility = '';
+    renderPlan();
+    checkImageSize();
+  };
+  planImg.onerror = () => toast('Could not load the floor plan image', true);
+  planImg.src = url;
+}
+
+// Plans uploaded before images were reduced automatically: offer to optimize them.
+function checkImageSize() {
+  const w = planImg.naturalWidth, h = planImg.naturalHeight;
+  const show = state.plan && isTooLarge(w, h) && !imageNoticeDismissed.has(state.plan.id);
+  $('#image-notice').hidden = !show;
+  if (show) {
+    $('#image-notice-text').innerHTML = `This floor plan image is very large (<strong>${w.toLocaleString()} × ${h.toLocaleString()} px</strong>),
+      which makes zooming and panning slow. Optimize it to at most ${MAX_EDGE.toLocaleString()} px? Anchor positions are not affected.`;
+  }
+}
+
+$('#image-notice-close').addEventListener('click', () => {
+  if (state.plan) imageNoticeDismissed.add(state.plan.id);
+  $('#image-notice').hidden = true;
+});
+
+$('#image-optimize').addEventListener('click', async () => {
+  const plan = state.plan;
+  if (!plan) return;
+  const btn = $('#image-optimize');
+  btn.disabled = true;
+  btn.textContent = 'Optimizing…';
+  try {
+    const blob = await store.getImageBlob(plan);
+    const r = await shrinkImage(blob, planImg.naturalWidth, planImg.naturalHeight);
+    const updated = await store.replacePlanImage(plan.id, r.blob);
+    if (state.plan?.id !== plan.id) return; // navigated away meanwhile
+    plan.imageUrl = updated.imageUrl;
+    plan.imageFile = updated.imageFile;
+    loadPlanImage(plan.imageUrl);
+    toast(`Image optimized to ${r.width} × ${r.height} px`);
+  } catch (err) { handleError(err); }
+  finally { btn.disabled = false; btn.textContent = 'Optimize image'; }
+});
 
 function fitView() {
   const r = viewer.getBoundingClientRect();
@@ -387,7 +475,25 @@ function zoomAt(factor, sx, sy) {
   v.tx = sx - (sx - v.tx) * f;
   v.ty = sy - (sy - v.ty) * f;
   v.s = ns;
-  renderPlan();
+  markMoving();
+  requestRender();
+}
+
+// Redraw at most once per screen frame: pointer and wheel events can arrive much faster.
+let renderQueued = false;
+function requestRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; renderPlan(); });
+}
+
+// While the map is moving, the plan image gets its own GPU layer (see .viewer.moving in CSS);
+// shortly after the movement stops it is re-drawn sharp at the new zoom level.
+let movingTimer;
+function markMoving() {
+  viewer.classList.add('moving');
+  clearTimeout(movingTimer);
+  movingTimer = setTimeout(() => viewer.classList.remove('moving'), 250);
 }
 
 function centerOn(a) {
@@ -440,10 +546,13 @@ function renderPlan() {
   if (!state.plan) return;
   const { s, tx, ty } = state.view;
   const W = state.plan.width, H = state.plan.height;
-  for (const el of [$('#plan-image'), $('#plan-border')]) {
-    el.setAttribute('x', tx); el.setAttribute('y', ty);
-    el.setAttribute('width', W * s); el.setAttribute('height', H * s);
+  if (planImg.naturalWidth) {
+    planImg.style.transform =
+      `translate(${tx}px, ${ty}px) scale(${(W * s) / planImg.naturalWidth}, ${(H * s) / planImg.naturalHeight})`;
   }
+  const border = $('#plan-border');
+  border.setAttribute('x', tx); border.setAttribute('y', ty);
+  border.setAttribute('width', W * s); border.setAttribute('height', H * s);
 
   // Crosshair placement: the anchor being placed sits under the centre of the map
   // (only while the map is actually visible).
@@ -1208,7 +1317,8 @@ svg.addEventListener('pointermove', (e) => {
     state.view.s = ns;
     state.view.tx = mx - (pinch.mx - pinch.tx0) * f;
     state.view.ty = my - (pinch.my - pinch.ty0) * f;
-    renderPlan();
+    markMoving();
+    requestRender();
     return;
   }
   if (drag) {
@@ -1217,7 +1327,7 @@ svg.addEventListener('pointermove', (e) => {
     const a = byId(drag.id);
     a.x = w.x - drag.offX;
     a.y = w.y - drag.offY;
-    renderPlan();
+    requestRender();
     updateLiveValues();
     $('#cursor-readout').textContent = `${a.serial}: x ${fmt(a.x, 3)} m, y ${fmt(a.y, 3)} m`;
     return;
@@ -1227,7 +1337,8 @@ svg.addEventListener('pointermove', (e) => {
     pan.moved = true;
     state.view.tx = pan.tx0 + (px - pan.startX);
     state.view.ty = pan.ty0 + (py - pan.startY);
-    renderPlan();
+    markMoving();
+    requestRender();
   }
 });
 

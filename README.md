@@ -86,6 +86,10 @@ This is why the USB method is recommended.
 
 1. **Upload a floor plan**: give it a name, choose a PNG or JPEG, and enter its real width and height in meters.
    (0, 0) is the bottom-left corner. The form suggests a height that matches the image's aspect ratio.
+   **Very large images are reduced automatically** to at most 8,192 px on the longest side (and 32 megapixels in total).
+   Many CAD exports are 20,000+ px wide, which makes zooming and panning crawl on any device.
+   Positions are in meters, so this does not affect accuracy: a 100 m wide plan still has about 1.3 cm per pixel.
+   For plans uploaded before this was added, the plan view offers an **Optimize image** button.
 2. **Add reference anchors**: enter the serial, choose *Reference*, then press *Add anchor*. A pin appears in the
    middle of the view. Drag it so its **tip** sits on the known spot, such as a column or a corner. You can also type X/Y,
    or select the pin and press the arrow keys to move it 1 cm at a time (hold Shift for 10 cm).

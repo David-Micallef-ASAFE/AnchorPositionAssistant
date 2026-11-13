@@ -176,6 +176,22 @@ async function handleApi(req, res, url) {
       }
     }
 
+    // Replace the image (e.g. with an optimized, smaller version). Anchor positions are in
+    // meters, so they are unaffected. A new file name avoids stale browser caches.
+    if (parts.length === 4 && parts[3] === 'image' && method === 'PUT') {
+      const body = await readJson(req);
+      const m = /^data:image\/(png|jpeg|jpg);base64,(.+)$/s.exec(body.image || '');
+      if (!m) return fail(res, 400, 'Image must be a PNG or JPEG');
+      const imageFile = `${fp.id}-${Date.now()}.${m[1] === 'png' ? 'png' : 'jpg'}`;
+      fs.writeFileSync(path.join(IMAGE_DIR, imageFile), Buffer.from(m[2], 'base64'));
+      const old = fp.imageFile;
+      fp.imageFile = imageFile;
+      fp.updatedAt = now();
+      saveDb();
+      if (old !== imageFile) fs.rm(path.join(IMAGE_DIR, old), { force: true }, () => {});
+      return send(res, 200, planWithCounts(fp));
+    }
+
     if (parts.length === 4 && parts[3] === 'anchors' && method === 'POST') {
       const body = await readJson(req);
       const v = validateAnchorFields(body, false);

@@ -73,9 +73,11 @@
   <main id="view-plan" class="view plan-view" hidden>
     <section class="viewer-wrap">
       <div id="viewer" class="viewer">
+        <!-- The plan image is an HTML image moved/scaled with a CSS transform (GPU-composited),
+             with the SVG (pins, lines, labels) drawn on top. -->
+        <img id="plan-img" alt="" draggable="false" decoding="async" />
         <svg id="plan-svg" xmlns="http://www.w3.org/2000/svg">
           <rect id="plan-bg" x="0" y="0" width="100%" height="100%" fill="transparent"/>
-          <image id="plan-image" preserveAspectRatio="none"/>
           <rect id="plan-border" fill="none"/>
           <g id="layer-lines"></g>
           <g id="layer-pins"></g>
@@ -88,6 +90,13 @@
         <button data-zoom="out" title="Zoom out">−</button>
         <button data-zoom="fit" title="Fit to screen">Fit</button>
         <label class="lock"><input type="checkbox" id="lock-pins" /> Lock pins</label>
+      </div>
+      <div id="image-notice" class="image-notice" hidden>
+        <div id="image-notice-text"></div>
+        <div class="btn-row">
+          <button id="image-optimize" class="primary small">Optimize image</button>
+          <button id="image-notice-close" class="small">Not now</button>
+        </div>
       </div>
       <div id="cursor-readout" class="cursor-readout"></div>
       <div id="mode-banner" class="mode-banner" hidden>

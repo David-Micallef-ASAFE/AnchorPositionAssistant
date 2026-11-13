@@ -14,6 +14,7 @@ const FILES = [
   'store.js',
   'validation.js',
   'planfile.js',
+  'imageprep.js',
   'trilateration.js',
   'qr-scanner.js',
   'serial.js',

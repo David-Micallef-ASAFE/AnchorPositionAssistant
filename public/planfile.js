@@ -53,13 +53,16 @@ function dataUrlToBlob(dataUrl) {
 }
 
 // Creates a new floor plan from the file. Returns the new plan.
-export async function importPlanFile(store, text, { name } = {}) {
+// prepareImage(blob) -> blob: optional hook, e.g. to shrink an oversized image.
+export async function importPlanFile(store, text, { name, prepareImage } = {}) {
   const data = parsePlanFile(text);
+  let image = dataUrlToBlob(data.image);
+  if (prepareImage) image = await prepareImage(image);
   const plan = await store.createPlan({
     name: name || data.plan.name,
     width: data.plan.width,
     height: data.plan.height,
-    image: dataUrlToBlob(data.image),
+    image,
   });
   try {
     const idBySerial = new Map();
