@@ -6,10 +6,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { validatePlanFields, validateAnchorFields, duplicateSerialMessage } from './public/validation.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const DATA_DIR = path.join(ROOT, 'data');
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const IMAGE_DIR = path.join(DATA_DIR, 'images');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const PORT = Number(process.env.PORT) || 3000;
@@ -43,7 +44,30 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
+
+// Hash of every file in public/, injected into the service worker. Any change to the app
+// changes sw.js, so installed phones pick up the new version the next time they can reach
+// the laptop, and always get a complete, consistent set of files.
+function buildHash() {
+  const h = crypto.createHash('sha256');
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else { h.update(path.relative(PUBLIC_DIR, p)); h.update(fs.readFileSync(p)); }
+    }
+  };
+  walk(PUBLIC_DIR);
+  return h.digest('hex').slice(0, 16);
+}
+
+function serveServiceWorker(res) {
+  const src = fs.readFileSync(path.join(PUBLIC_DIR, 'sw.js'), 'utf8').replace("'__BUILD_HASH__'", `'${buildHash()}'`);
+  res.writeHead(200, { 'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache' });
+  res.end(src);
+}
 
 // ---------- helpers ----------
 function send(res, status, body) {
@@ -84,6 +108,7 @@ function serveFile(res, filePath) {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
       'Content-Length': st.size,
+      'Cache-Control': 'no-cache',
     });
     fs.createReadStream(filePath).pipe(res);
   });
@@ -95,47 +120,12 @@ function safeJoin(base, rel) {
   return p.startsWith(base + path.sep) || p === base ? p : null;
 }
 
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const now = () => new Date().toISOString();
 
 function planWithCounts(fp) {
   return { ...fp, anchorCount: db.anchors.filter((a) => a.floorplanId === fp.id).length };
 }
 
-function validateAnchorFields(body, partial) {
-  const out = {};
-  if (!partial || 'serial' in body) {
-    const s = typeof body.serial === 'string' ? body.serial.trim() : '';
-    if (!s) return { error: 'Serial number is required' };
-    out.serial = s;
-  }
-  if (!partial || 'type' in body) {
-    if (body.type !== 'reference' && body.type !== 'approximate') return { error: 'Type must be "reference" or "approximate"' };
-    out.type = body.type;
-  }
-  for (const k of ['x', 'y']) {
-    if (!partial || k in body) {
-      if (!isNum(body[k])) return { error: `${k} must be a number` };
-      out[k] = body[k];
-    }
-  }
-  if ('measurements' in body) {
-    if (!Array.isArray(body.measurements)) return { error: 'measurements must be an array' };
-    const ms = [];
-    for (const m of body.measurements) {
-      if (!m || typeof m.toAnchorId !== 'string') return { error: 'Each measurement needs toAnchorId' };
-      if (m.distance !== null && !(isNum(m.distance) && m.distance >= 0)) return { error: 'Distance must be a non-negative number' };
-      ms.push({ id: typeof m.id === 'string' ? m.id : crypto.randomUUID(), toAnchorId: m.toAnchorId, distance: m.distance });
-    }
-    out.measurements = ms;
-  }
-  if ('lastSolve' in body) out.lastSolve = body.lastSolve ?? null;
-  if ('export' in body) {
-    if (typeof body.export !== 'boolean') return { error: 'export must be true or false' };
-    out.export = body.export;
-  }
-  return { value: out };
-}
 
 // ---------- API ----------
 async function handleApi(req, res, url) {
@@ -154,16 +144,14 @@ async function handleApi(req, res, url) {
     }
     if (method === 'POST') {
       const body = await readJson(req);
-      const name = typeof body.name === 'string' ? body.name.trim() : '';
-      if (!name) return fail(res, 400, 'Name is required');
-      if (!(isNum(body.width) && body.width > 0 && isNum(body.height) && body.height > 0))
-        return fail(res, 400, 'Width and height must be positive numbers (meters)');
+      const v = validatePlanFields(body);
+      if (v.error) return fail(res, 400, v.error);
       const m = /^data:image\/(png|jpeg|jpg);base64,(.+)$/s.exec(body.image || '');
       if (!m) return fail(res, 400, 'Image must be a PNG or JPEG');
       const id = crypto.randomUUID();
       const imageFile = `${id}.${m[1] === 'png' ? 'png' : 'jpg'}`;
       fs.writeFileSync(path.join(IMAGE_DIR, imageFile), Buffer.from(m[2], 'base64'));
-      const fp = { id, name, width: body.width, height: body.height, imageFile, createdAt: now() };
+      const fp = { id, ...v.value, imageFile, createdAt: now() };
       db.floorplans.push(fp);
       saveDb();
       return send(res, 201, planWithCounts(fp));
@@ -193,7 +181,7 @@ async function handleApi(req, res, url) {
       const v = validateAnchorFields(body, false);
       if (v.error) return fail(res, 400, v.error);
       if (db.anchors.some((a) => a.floorplanId === fp.id && a.serial === v.value.serial))
-        return fail(res, 409, `Anchor ${v.value.serial} already exists on this floor plan`);
+        return fail(res, 409, duplicateSerialMessage(v.value.serial));
       const anchor = { id: crypto.randomUUID(), floorplanId: fp.id, measurements: [], lastSolve: null, export: true, ...v.value, createdAt: now() };
       db.anchors.push(anchor);
       saveDb();
@@ -210,7 +198,7 @@ async function handleApi(req, res, url) {
       const v = validateAnchorFields(body, true);
       if (v.error) return fail(res, 400, v.error);
       if (v.value.serial && db.anchors.some((a) => a.id !== anchor.id && a.floorplanId === anchor.floorplanId && a.serial === v.value.serial))
-        return fail(res, 409, `Anchor ${v.value.serial} already exists on this floor plan`);
+        return fail(res, 409, duplicateSerialMessage(v.value.serial));
       Object.assign(anchor, v.value, { updatedAt: now() });
       saveDb();
       return send(res, 200, anchor);
@@ -240,7 +228,14 @@ const server = http.createServer(async (req, res) => {
       const p = safeJoin(IMAGE_DIR, decodeURIComponent(url.pathname.slice('/images/'.length)));
       return p ? serveFile(res, p) : fail(res, 404, 'Not found');
     }
-    const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1));
+    // Phone app (offline, on-device storage): the same files, served under /app/.
+    if (url.pathname === '/app') { res.writeHead(301, { Location: '/app/' }); return res.end(); }
+    let pathname = url.pathname;
+    if (pathname.startsWith('/app/')) {
+      pathname = pathname.slice('/app'.length);
+      if (pathname === '/sw.js') return serveServiceWorker(res);
+    }
+    const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname.slice(1));
     const p = safeJoin(PUBLIC_DIR, rel);
     return p ? serveFile(res, p) : fail(res, 404, 'Not found');
   } catch (err) {

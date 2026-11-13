@@ -14,6 +14,63 @@ npm start
 Open http://127.0.0.1:3000. Set `PORT=xxxx` to use a different port.
 
 Data is stored in `data/db.json`, and the images in `data/images/`. Delete the `data` folder to start over.
+Set `DATA_DIR=<folder>` to keep the data somewhere else.
+
+## Two versions from the same code
+
+| Address | Who uses it | Where the data lives |
+|---|---|---|
+| `http://localhost:3000/` | The laptop web app | On the laptop, in `data/` |
+| `http://localhost:3000/app/` | The phone app (Android). It is installable and works offline | On the phone only |
+
+Both versions have the same features. On a touch screen the app also shows a crosshair for precise placement,
+nudge buttons and larger touch targets. On a narrow screen, the panel slides up from the bottom.
+
+## Installing the phone app (Android, one time per phone)
+
+Chrome only installs offline apps from a secure address, and `http://localhost` counts as one.
+The phone reaches the laptop's `localhost` over a USB cable, so no certificates are needed.
+
+**One-time setup on the laptop:** download Google's
+[SDK Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools), unzip it,
+and add the folder to your `PATH` so that `adb` works in a terminal.
+
+**One-time setup on the phone:** go to *Settings → About phone* and tap *Build number* 7 times to enable Developer options.
+Then go to *Settings → Developer options* and turn on **USB debugging**.
+
+**Install:**
+
+1. Run `npm start` on the laptop.
+2. Connect the phone by USB, accept the "Allow USB debugging?" prompt, and run:
+   ```
+   npm run phone
+   ```
+   This runs `adb reverse tcp:3000 tcp:3000`, so `localhost:3000` on the phone reaches the laptop.
+3. On the phone, open **Chrome** and go to `http://localhost:3000/app/`.
+4. In Chrome's ⋮ menu, choose **Install app** (or **Add to Home screen**).
+
+You can now unplug the phone. The app opens from the home screen and works with no connection at all.
+
+**Updating the app:** connect the phone again, run `npm start` and `npm run phone`, and open the app.
+It downloads the new version in the background and shows "The app was updated". Close and reopen the app to use the new version.
+Your data on the phone is kept.
+
+**Important:**
+- **The data belongs to the address.** Always install and update from exactly `http://localhost:3000/app/`.
+  If you use a different port or address, Chrome treats it as a different app with separate, empty storage.
+- **The phone holds the only copy** of its floor plans. Uninstalling the app or clearing Chrome's site data deletes them.
+  Use **Backup** regularly (see below).
+
+<details><summary>Alternative without a USB cable (Wi-Fi, less convenient)</summary>
+
+1. Start the server so other devices can reach it: in PowerShell, run `$env:HOST='0.0.0.0'; npm start`, and allow it through the Windows firewall.
+2. On the phone, open `chrome://flags/#unsafely-treat-insecure-origin-as-secure` and enter `http://<laptop-IP>:3000`.
+   Then set the flag to *Enabled* and relaunch Chrome.
+3. Open `http://<laptop-IP>:3000/app/` and install the app as above.
+
+The data then belongs to `http://<laptop-IP>:3000`. If the laptop's IP address changes, a new install starts with empty storage.
+This is why the USB method is recommended.
+</details>
 
 ## Workflow
 
@@ -22,6 +79,9 @@ Data is stored in `data/db.json`, and the images in `data/images/`. Delete the `
 2. **Add reference anchors**: enter the serial, choose *Reference*, then press *Add anchor*. A pin appears in the
    middle of the view. Drag it so its **tip** sits on the known spot, such as a column or a corner. You can also type X/Y,
    or select the pin and press the arrow keys to move it 1 cm at a time (hold Shift for 10 cm).
+   **On a phone,** your finger would hide the pin tip, so a new anchor starts in **crosshair mode**.
+   The pin stays under a fixed crosshair in the middle of the screen while you drag and pinch the map. Tap **Set position** when it is in place.
+   *Place with crosshair* and the ← ↑ ↓ → nudge buttons (1 cm or 10 cm) are available for any selected anchor.
    **Tip:** press **📷 Scan** next to the serial field to read the anchor's QR code with the webcam.
    `AS-123456` is entered as `123456`. If the anchor is already on the plan, it is selected instead.
    The browser asks for camera permission the first time. Scanning works offline, because the decoder (jsQR, Apache-2.0) is
@@ -43,6 +103,9 @@ Data is stored in `data/db.json`, and the images in `data/images/`. Delete the `
    - **Export SQL**: one statement per anchor, ready to run against the device database:
      `update device set space_coordinates=(10,25.3) where serial_number='123456';`
      Coordinates are in meters, rounded to the millimeter, with no trailing zeros.
+6. **Backup / move a plan**: **Backup** in the floor plan list saves the whole plan as one `.apaplan.json` file.
+   The file contains the image, the anchors with their export ticks and the measurements. **Import plan** loads such a file as a new plan.
+   This works in both versions, so you can move a plan from the phone to the laptop or the other way.
 
 ## Notes on the calculation
 

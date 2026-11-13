@@ -1,6 +1,19 @@
 import { solvePosition } from './trilateration.js';
 import { scanSerial } from './qr-scanner.js';
 import { buildCsv, buildSql, isExported, sortAnchors } from './exporters.js';
+import { createServerStore, createLocalStore } from './store.js';
+import { exportPlanFile, importPlanFile, PLAN_FILE_EXT } from './planfile.js';
+
+// ======================================================================
+// Mode: laptop web app (server storage) or phone app (on-device storage)
+// ======================================================================
+// The same files are served at "/" (laptop, data on the server) and "/app/" (phone app:
+// installable, works offline, data stored on the device).
+const LOCAL_MODE = location.pathname.startsWith('/app/');
+const store = LOCAL_MODE ? createLocalStore() : createServerStore();
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+const TAP = TOUCH ? 'Tap' : 'Click';
+document.body.classList.toggle('touch', TOUCH);
 
 // ======================================================================
 // Helpers
@@ -10,18 +23,6 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const fmt = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '–');
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-
-async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
-}
 
 let toastTimer;
 function toast(msg, isError = false) {
@@ -39,6 +40,47 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+const safeFileName = (name) => name.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'floorplan';
+
+function downloadFile(content, fileName, mime) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// ======================================================================
+// Phone app setup: offline support, install, persistent storage
+// ======================================================================
+if (LOCAL_MODE) {
+  document.body.classList.add('local-mode');
+  const link = document.createElement('link');
+  link.rel = 'manifest';
+  link.href = 'manifest.webmanifest';
+  document.head.appendChild(link);
+  $('#mode-badge').hidden = false;
+  $('#local-note').hidden = false;
+
+  if ('serviceWorker' in navigator) {
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) toast('The app was updated – close and reopen it to use the new version.');
+      hadController = true;
+    });
+    navigator.serviceWorker.register('sw.js').catch((err) => {
+      console.warn(err);
+      toast('Offline support is unavailable here: ' + err.message, true);
+    });
+  }
+  // Ask the browser not to evict our data when the phone is low on space.
+  navigator.storage?.persist?.().catch(() => {});
+}
+
 // ======================================================================
 // Routing
 // ======================================================================
@@ -50,12 +92,14 @@ function route() {
 window.addEventListener('hashchange', route);
 
 // ======================================================================
-// Home: floor plan list + upload
+// Home: floor plan list + upload + import
 // ======================================================================
 const home = { search: '' };
 
 function showHome() {
+  cancelPlace();
   state.plan = null;
+  document.body.classList.remove('plan-open');
   $('#view-plan').hidden = true;
   $('#view-home').hidden = false;
   $('#topbar-context').innerHTML = '';
@@ -64,21 +108,22 @@ function showHome() {
 
 async function loadPlans() {
   try {
-    const list = await api('GET', '/api/floorplans?q=' + encodeURIComponent(home.search));
+    const list = await store.listPlans(home.search);
     $('#plan-rows').innerHTML = list.map((fp) => `
       <tr class="clickable" data-open="${fp.id}">
-        <td><img class="thumb" src="/images/${encodeURIComponent(fp.imageFile)}" alt="" loading="lazy" /></td>
+        <td><img class="thumb" src="${esc(fp.imageUrl)}" alt="" loading="lazy" /></td>
         <td><strong>${esc(fp.name)}</strong></td>
-        <td>${fmt(fp.width)} × ${fmt(fp.height)}</td>
+        <td class="nowrap">${fmt(fp.width)} × ${fmt(fp.height)}</td>
         <td>${fp.anchorCount}</td>
-        <td class="muted small">${new Date(fp.createdAt).toLocaleString()}</td>
+        <td class="muted small col-created">${new Date(fp.createdAt).toLocaleString()}</td>
         <td class="actions">
           <button data-open="${fp.id}">Open</button>
+          <button data-backup="${fp.id}" title="Save the whole plan (image, anchors, measurements) as one file">Backup</button>
           <button class="danger" data-delete="${fp.id}" data-name="${esc(fp.name)}">Delete</button>
         </td>
       </tr>`).join('');
     $('#plan-empty').hidden = list.length > 0;
-    $('#plan-empty').textContent = home.search ? 'No floor plans match your search.' : 'No floor plans yet. Upload one on the left.';
+    $('#plan-empty').textContent = home.search ? 'No floor plans match your search.' : 'No floor plans yet. Upload or import one.';
   } catch (e) { handleError(e); }
 }
 
@@ -89,26 +134,46 @@ $('#plan-rows').addEventListener('click', async (e) => {
   if (del) {
     e.stopPropagation();
     if (!confirm(`Delete floor plan "${del.dataset.name}" and all its anchors? This cannot be undone.`)) return;
-    try { await api('DELETE', '/api/floorplans/' + del.dataset.delete); toast('Floor plan deleted'); loadPlans(); }
+    try { await store.deletePlan(del.dataset.delete); toast('Floor plan deleted'); loadPlans(); }
     catch (err) { handleError(err); }
+    return;
+  }
+  const backup = e.target.closest('[data-backup]');
+  if (backup) {
+    e.stopPropagation();
+    backup.disabled = true;
+    try {
+      const { plan, json } = await exportPlanFile(store, backup.dataset.backup);
+      downloadFile(json, `${safeFileName(plan.name)}_${new Date().toISOString().slice(0, 10)}.${PLAN_FILE_EXT}`, 'application/json');
+      toast(`Saved a backup of "${plan.name}"`);
+    } catch (err) { handleError(err); }
+    finally { backup.disabled = false; }
     return;
   }
   const open = e.target.closest('[data-open]');
   if (open) location.hash = '#/plan/' + open.dataset.open;
 });
 
+// --- import a plan file ---
+$('#import-plan').addEventListener('click', () => $('#import-file').click());
+$('#import-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let text;
+  try { text = await file.text(); }
+  catch (err) { console.error(err); toast('Could not read this file. Save it to the phone first (e.g. Downloads) and pick it from there.', true); return; }
+  try {
+    const plan = await importPlanFile(store, text);
+    toast(`Imported "${plan.name}"`);
+    location.hash = '#/plan/' + plan.id;
+  } catch (err) { handleError(err); }
+});
+
 // --- upload form ---
 const uploadForm = $('#upload-form');
-let uploadImg = null; // { dataUrl, w, h }
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
-}
+let uploadImg = null; // { file, w, h }
+let previewUrl = null;
 
 function updateUploadHint() {
   const hint = $('#upload-hint');
@@ -133,21 +198,42 @@ function updateUploadHint() {
   hint.innerHTML = html;
 }
 
+// PNG / JPEG from the first bytes (some Android pickers don't report a MIME type).
+function sniffImageType(bytes) {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  return null;
+}
+
 uploadForm.image.addEventListener('change', async () => {
   const file = uploadForm.image.files[0];
   uploadImg = null;
   $('#upload-preview').hidden = true;
+  if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
   if (!file) return;
-  if (!/^image\/(png|jpeg)$/.test(file.type)) { toast('Please choose a PNG or JPEG image', true); uploadForm.image.value = ''; return; }
-  const dataUrl = await readFileAsDataUrl(file);
+  // Read the file into memory right away. On Android, permission to read a picked file
+  // (especially from Photos, Drive or other cloud sources) can expire before "Upload" is pressed.
+  let bytes;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch (err) {
+    console.error(err);
+    toast('Could not read this image. Save it to the phone first (e.g. Downloads) and pick it from there.', true);
+    uploadForm.image.value = '';
+    return;
+  }
+  const type = sniffImageType(bytes);
+  if (!type) { toast('Please choose a PNG or JPEG image', true); uploadForm.image.value = ''; return; }
+  const blob = new Blob([bytes], { type });
+  previewUrl = URL.createObjectURL(blob);
   const img = $('#upload-preview img');
   img.onload = () => {
-    uploadImg = { dataUrl, w: img.naturalWidth, h: img.naturalHeight };
+    uploadImg = { file: blob, w: img.naturalWidth, h: img.naturalHeight };
     $('#upload-preview').hidden = false;
     if (!uploadForm.name.value) uploadForm.name.value = file.name.replace(/\.[^.]+$/, '');
     updateUploadHint();
   };
-  img.src = dataUrl;
+  img.src = previewUrl;
 });
 uploadForm.width.addEventListener('input', updateUploadHint);
 uploadForm.height.addEventListener('input', updateUploadHint);
@@ -165,11 +251,11 @@ uploadForm.addEventListener('submit', async (e) => {
   const btn = uploadForm.querySelector('button[type=submit]');
   btn.disabled = true;
   try {
-    const fp = await api('POST', '/api/floorplans', {
+    const fp = await store.createPlan({
       name: uploadForm.name.value.trim(),
       width: parseFloat(uploadForm.width.value),
       height: parseFloat(uploadForm.height.value),
-      image: uploadImg.dataUrl,
+      image: uploadImg.file,
     });
     uploadForm.reset();
     uploadImg = null;
@@ -184,7 +270,7 @@ uploadForm.addEventListener('submit', async (e) => {
 // Plan view state
 // ======================================================================
 const state = {
-  plan: null,            // { id, name, width, height, imageFile, anchors: [] }
+  plan: null,            // { id, name, width, height, imageUrl, anchors: [] }
   selectedId: null,
   view: { s: 1, tx: 0, ty: 0, fitS: 1 },
   needsFit: true,
@@ -194,8 +280,10 @@ const state = {
   solve: null,           // { anchorId, result, rows }
   anchorFilter: '',
   locked: false,
-  pickMode: false,       // waiting for the user to click the anchor a measurement goes to
+  pickMode: false,       // waiting for the user to pick the anchor a measurement goes to
   highlightId: null,     // anchor highlighted on the plan (hovered measurement row)
+  placeMode: null,       // { id, orig: { x, y } } – positioning an anchor under the crosshair
+  nudgeStep: 0.01,
 };
 
 const svg = $('#plan-svg');
@@ -217,20 +305,26 @@ function pointerPos(e) {
   const r = svg.getBoundingClientRect();
   return [e.clientX - r.left, e.clientY - r.top];
 }
+function viewerCenter() {
+  const r = viewer.getBoundingClientRect();
+  return [r.width / 2, r.height / 2];
+}
 
 async function openPlan(id) {
-  const plan = await api('GET', '/api/floorplans/' + id);
+  const plan = await store.getPlan(id);
   for (const a of plan.anchors) a.measurements ??= [];
+  cancelPlace();
   Object.assign(state, {
     plan, selectedId: null, needsFit: true, measureMode: false, measurePoint: null, solve: null, anchorFilter: '',
+    pickMode: false, highlightId: null,
   });
   $('#anchor-search').value = '';
+  document.body.classList.add('plan-open');
   $('#view-home').hidden = true;
   $('#view-plan').hidden = false;
-  $('#topbar-context').innerHTML = `<a href="#/" style="color:#93c5fd">← All floor plans</a>
-    <span>|</span><strong>${esc(plan.name)}</strong><span>${fmt(plan.width)} × ${fmt(plan.height)} m</span>`;
-  const img = $('#plan-image');
-  img.setAttribute('href', '/images/' + encodeURIComponent(plan.imageFile));
+  $('#topbar-context').innerHTML = `<a href="#/" class="back-link">← <span class="hide-narrow">All floor plans</span></a>
+    <strong class="plan-title">${esc(plan.name)}</strong><span class="hide-narrow">${fmt(plan.width)} × ${fmt(plan.height)} m</span>`;
+  $('#plan-image').setAttribute('href', plan.imageUrl);
   fitView();
   renderAll();
 }
@@ -238,14 +332,18 @@ async function openPlan(id) {
 function fitView() {
   const r = viewer.getBoundingClientRect();
   if (!state.plan || r.width === 0) return;
-  const pad = 50;
-  const s = Math.min((r.width - 2 * pad) / state.plan.width, (r.height - 2 * pad) / state.plan.height);
+  const pad = Math.min(50, r.width * 0.06);
+  // Leave room at the top for the toolbar plus a pin's height, so pins on the top edge stay tappable.
+  const tb = $('.viewer-toolbar').getBoundingClientRect();
+  const padTop = Math.max(pad, tb.bottom - r.top + 44);
+  const s = Math.min((r.width - 2 * pad) / state.plan.width, (r.height - padTop - pad) / state.plan.height);
   state.view = {
     s, fitS: s,
     tx: (r.width - state.plan.width * s) / 2,
-    ty: (r.height - state.plan.height * s) / 2 + 15, // a little lower so top pins are visible
+    ty: padTop + (r.height - padTop - pad - state.plan.height * s) / 2,
   };
   state.needsFit = false;
+  lastViewerSize = { w: r.width, h: r.height };
 }
 
 function zoomAt(factor, sx, sy) {
@@ -259,10 +357,10 @@ function zoomAt(factor, sx, sy) {
 }
 
 function centerOn(a) {
-  const r = viewer.getBoundingClientRect();
+  const [cx, cy] = viewerCenter();
   const [sx, sy] = toScreen(a.x, a.y);
-  state.view.tx += r.width / 2 - sx;
-  state.view.ty += r.height / 2 - sy;
+  state.view.tx += cx - sx;
+  state.view.ty += cy - sy;
   renderPlan();
 }
 
@@ -272,7 +370,17 @@ function isOnScreen(a) {
   return sx > 20 && sy > 50 && sx < r.width - 20 && sy < r.height - 10;
 }
 
+// Keep the point at the centre of the map fixed when the map area changes size
+// (window resize, phone rotation, the bottom sheet growing/shrinking).
+let lastViewerSize = null;
 new ResizeObserver(() => {
+  const r = viewer.getBoundingClientRect();
+  // Only a real resize of a visible map shifts the view (not the map appearing after being hidden).
+  if (state.plan && lastViewerSize && lastViewerSize.w > 0 && lastViewerSize.h > 0 && !state.needsFit) {
+    state.view.tx += (r.width - lastViewerSize.w) / 2;
+    state.view.ty += (r.height - lastViewerSize.h) / 2;
+  }
+  lastViewerSize = { w: r.width, h: r.height };
   if (!state.plan) return;
   if (state.needsFit) fitView();
   renderPlan();
@@ -296,6 +404,17 @@ function renderPlan() {
   for (const el of [$('#plan-image'), $('#plan-border')]) {
     el.setAttribute('x', tx); el.setAttribute('y', ty);
     el.setAttribute('width', W * s); el.setAttribute('height', H * s);
+  }
+
+  // Crosshair placement: the anchor being placed sits under the centre of the map.
+  if (state.placeMode) {
+    const a = byId(state.placeMode.id);
+    if (a) {
+      const w = toWorld(...viewerCenter());
+      a.x = w.x; a.y = w.y;
+      $('#place-readout').textContent = `${a.serial}: x ${fmt(a.x, 3)} m, y ${fmt(a.y, 3)} m`;
+      updateLiveValues();
+    }
   }
 
   const sel = selected();
@@ -357,6 +476,7 @@ function renderPlan() {
       state.locked ? 'locked' : ''].join(' ');
     pins += `<g class="${cls}" data-anchor-id="${a.id}" transform="translate(${sx},${sy})">
       <title>${esc(a.serial)} (${a.type}) – x ${fmt(a.x, 3)}, y ${fmt(a.y, 3)}</title>
+      <circle class="pin-hit" cx="0" cy="-22" r="${TOUCH ? 24 : 16}"/>
       <path class="pin-shape ${a.type === 'reference' ? 'ref' : 'approx'}" d="${PIN_PATH}"/>
       <circle cx="0" cy="-26" r="4.5" fill="#fff"/>
       <circle class="pin-tip" r="2.5"/>
@@ -370,12 +490,16 @@ function renderPlan() {
 
   viewer.classList.toggle('measuring', state.measureMode);
   viewer.classList.toggle('picking', state.pickMode);
+  document.body.classList.toggle('placing', !!state.placeMode);
+  $('#crosshair').hidden = !state.placeMode;
+  $('#place-bar').hidden = !state.placeMode;
   const banner = $('#mode-banner');
   banner.hidden = !sel || !(state.measureMode || state.pickMode);
   if (!banner.hidden) {
+    const esc_ = TOUCH ? '' : ' Esc to cancel.';
     banner.textContent = state.pickMode
-      ? `Click the anchor you measured to from ${sel.serial} (on the plan or in the list). Esc to cancel.`
-      : `Click on the plan to measure from ${sel.serial}. Press Esc to stop.`;
+      ? `${TAP} the anchor you measured to from ${sel.serial} (on the plan or in the list).${esc_}`
+      : `${TAP} on the plan to measure from ${sel.serial}.${esc_}`;
   }
 }
 
@@ -393,7 +517,7 @@ function renderAnchorTable() {
   $('#anchor-rows').innerHTML = list.map((a) => `
     <tr class="clickable ${a.id === state.selectedId ? 'selected' : ''}" data-select="${a.id}">
       <td><strong>${esc(a.serial)}</strong></td>
-      <td><span class="badge ${a.type}">${a.type === 'reference' ? 'Reference' : 'Approx.'}</span></td>
+      <td><span class="badge ${a.type}">${a.type === 'reference' ? 'Ref' : 'Approx'}</span></td>
       <td class="num" data-live-x="${a.id}">${fmt(a.x)}</td>
       <td class="num" data-live-y="${a.id}">${fmt(a.y)}</td>
       <td class="center"><input type="checkbox" data-export="${a.id}" ${isExported(a) ? 'checked' : ''} title="Include in CSV / SQL export"/></td>
@@ -406,7 +530,7 @@ function renderAnchorTable() {
   all.disabled = list.length === 0;
   const empty = $('#anchor-empty');
   empty.hidden = list.length > 0;
-  empty.textContent = f && anchors().length ? 'No anchors match your search.' : 'No anchors yet. Add one above, then drag its pin to where it is installed.';
+  empty.textContent = f && anchors().length ? 'No anchors match your search.' : 'No anchors yet. Add one above, then move its pin to where it is installed.';
 }
 
 $('#anchor-search').addEventListener('input', (e) => { state.anchorFilter = e.target.value; renderAnchorTable(); });
@@ -418,7 +542,8 @@ $('#anchor-rows').addEventListener('click', async (e) => {
     const a = byId(del.dataset.deleteAnchor);
     if (!a || !confirm(`Delete anchor ${a.serial}?`)) return;
     try {
-      await api('DELETE', '/api/anchors/' + a.id);
+      if (state.placeMode?.id === a.id) cancelPlace();
+      await store.deleteAnchor(a.id);
       state.plan.anchors = anchors().filter((x) => x.id !== a.id);
       for (const o of anchors()) o.measurements = o.measurements.filter((m) => m.toAnchorId !== a.id);
       if (state.selectedId === a.id) selectAnchor(null);
@@ -444,17 +569,22 @@ $('#anchor-form').addEventListener('submit', async (e) => {
   const serial = form.serial.value.trim();
   if (!serial) return;
   // Drop the new pin at the centre of the current view (clamped to the plan).
-  const r = viewer.getBoundingClientRect();
-  const c = toWorld(r.width / 2, r.height / 2);
+  const c = toWorld(...viewerCenter());
   const x = clamp(c.x, 0, state.plan.width), y = clamp(c.y, 0, state.plan.height);
   try {
-    const a = await api('POST', `/api/floorplans/${state.plan.id}/anchors`, { serial, type: form.type.value, x, y });
+    const a = await store.createAnchor(state.plan.id, { serial, type: form.type.value, x, y });
     a.measurements ??= [];
     state.plan.anchors.push(a);
     form.serial.value = '';
+    form.serial.blur();
     state.anchorFilter = ''; $('#anchor-search').value = '';
     selectAnchor(a.id);
-    toast(`Anchor ${a.serial} added – drag the pin tip to the installed position`);
+    if (TOUCH) {
+      startPlace(a);
+      toast(`Anchor ${a.serial} added – move the map so the crosshair is on its position`);
+    } else {
+      toast(`Anchor ${a.serial} added – drag the pin tip to the installed position`);
+    }
   } catch (err) { handleError(err); }
 });
 
@@ -462,7 +592,7 @@ $('#anchor-form').addEventListener('submit', async (e) => {
 $('#scan-serial').addEventListener('click', async () => {
   const form = $('#anchor-form');
   const serial = await scanSerial();
-  if (!serial) { form.serial.focus(); return; }
+  if (!serial) { if (!TOUCH) form.serial.focus(); return; }
   const existing = anchors().find((a) => a.serial === serial);
   if (existing) {
     toast(`Anchor ${serial} is already on this floor plan – selected it`);
@@ -476,19 +606,6 @@ $('#scan-serial').addEventListener('click', async () => {
 });
 
 // ---------- Export (CSV / SQL) ----------
-function downloadFile(content, ext, mime) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const safeName = state.plan.name.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'floorplan';
-  link.href = url;
-  link.download = `${safeName}_anchors_${new Date().toISOString().slice(0, 10)}.${ext}`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 function anchorsForExport() {
   if (!state.plan) return null;
   const list = anchors().filter(isExported);
@@ -504,18 +621,20 @@ function exportedToast(list) {
   toast(`Exported ${list.length} anchor(s)` + (skipped ? `, ${skipped} unticked skipped` : ''));
 }
 
+const exportName = (ext) => `${safeFileName(state.plan.name)}_anchors_${new Date().toISOString().slice(0, 10)}.${ext}`;
+
 $('#export-csv').addEventListener('click', () => {
   const list = anchorsForExport();
   if (!list) return;
   // BOM so Excel opens it as UTF-8
-  downloadFile('﻿' + buildCsv(state.plan.name, list), 'csv', 'text/csv;charset=utf-8');
+  downloadFile('﻿' + buildCsv(state.plan.name, list), exportName('csv'), 'text/csv;charset=utf-8');
   exportedToast(list);
 });
 
 $('#export-sql').addEventListener('click', () => {
   const list = anchorsForExport();
   if (!list) return;
-  downloadFile(buildSql(state.plan.name, list), 'sql', 'application/sql;charset=utf-8');
+  downloadFile(buildSql(state.plan.name, list), exportName('sql'), 'application/sql;charset=utf-8');
   exportedToast(list);
 });
 
@@ -539,6 +658,7 @@ $('#export-all').addEventListener('change', (e) => setExportFlag(filteredAnchors
 
 function selectAnchor(id) {
   if (state.selectedId !== id) {
+    if (state.placeMode && state.placeMode.id !== id) cancelPlace();
     state.measurePoint = null;
     state.pickMode = false;
     state.highlightId = null;
@@ -547,6 +667,38 @@ function selectAnchor(id) {
   state.selectedId = id;
   renderAll();
 }
+
+// ======================================================================
+// Crosshair placement (precise positioning on touch screens; works with a mouse too)
+// ======================================================================
+function startPlace(a) {
+  state.pickMode = false;
+  state.measureMode = false;
+  state.placeMode = { id: a.id, orig: { x: a.x, y: a.y } };
+  centerOn(a); // no jump: the pin starts exactly under the crosshair
+  renderAll();
+}
+
+function finishPlace() {
+  const pm = state.placeMode;
+  if (!pm) return;
+  state.placeMode = null;
+  const a = byId(pm.id);
+  renderAll();
+  if (a) patchAnchor(a, { x: a.x, y: a.y }).then((ok) => ok && toast(`Position of ${a.serial} saved`));
+}
+
+function cancelPlace() {
+  const pm = state.placeMode;
+  if (!pm) return;
+  state.placeMode = null;
+  const a = byId(pm.id);
+  if (a) { a.x = pm.orig.x; a.y = pm.orig.y; }
+  if (state.plan) renderAll();
+}
+
+$('#place-done').addEventListener('click', finishPlace);
+$('#place-cancel').addEventListener('click', cancelPlace);
 
 // ======================================================================
 // Rendering: selected anchor panel
@@ -562,7 +714,7 @@ function measurementRowsHtml(a) {
       : '<span class="muted">(anchor deleted)</span>';
     return `<tr data-mid="${m.id}" data-target="${t ? t.id : ''}">
       <td class="meas-target" title="Hover to highlight on the plan">${target}</td>
-      <td class="num"><input type="number" step="0.001" min="0" data-field="distance" value="${Number.isFinite(m.distance) ? m.distance : ''}" placeholder="m"/></td>
+      <td class="num"><input type="number" inputmode="decimal" step="0.001" min="0" data-field="distance" value="${Number.isFinite(m.distance) ? m.distance : ''}" placeholder="m" enterkeyhint="next"/></td>
       <td class="num muted" data-live-plan="${m.id}">${t ? fmt(dist(a, t)) : '–'}</td>
       <td class="num">${resid}</td>
       <td><button class="danger icon" data-action="remove-meas" title="Remove">✕</button></td>
@@ -580,6 +732,7 @@ function renderSelected() {
   const a = selected();
   if (!a) { panel.hidden = true; panel.innerHTML = ''; return; }
   panel.hidden = false;
+  const step = state.nudgeStep;
 
   let html = `
     <h3>Anchor ${esc(a.serial)} <span class="badge ${a.type}">${a.type === 'reference' ? 'Reference' : 'Approximate'}</span></h3>
@@ -592,16 +745,29 @@ function renderSelected() {
       </div>
       <span>Position (m)</span>
       <div class="xy">
-        <input type="number" step="0.01" data-field="x" value="${fmt(a.x, 3)}" title="X (m from left)"/>
-        <input type="number" step="0.01" data-field="y" value="${fmt(a.y, 3)}" title="Y (m from bottom)"/>
+        <input type="number" inputmode="decimal" step="0.01" data-field="x" value="${fmt(a.x, 3)}" title="X (m from left)"/>
+        <input type="number" inputmode="decimal" step="0.01" data-field="y" value="${fmt(a.y, 3)}" title="Y (m from bottom)"/>
+      </div>
+      <span class="touch-only">Nudge</span>
+      <div class="nudge touch-only">
+        <button data-action="nudge" data-dx="-1" data-dy="0" title="Left">←</button>
+        <button data-action="nudge" data-dx="0" data-dy="1" title="Up">↑</button>
+        <button data-action="nudge" data-dx="0" data-dy="-1" title="Down">↓</button>
+        <button data-action="nudge" data-dx="1" data-dy="0" title="Right">→</button>
+        <div class="seg small-seg">
+          <button data-action="step" data-step="0.01" class="${step === 0.01 ? 'on approximate' : ''}">1 cm</button>
+          <button data-action="step" data-step="0.1" class="${step === 0.1 ? 'on approximate' : ''}">10 cm</button>
+        </div>
       </div>
     </div>
     <div class="btn-row">
+      <button data-action="place" class="${state.placeMode ? 'active' : ''}" ${state.locked ? 'disabled' : ''}>⌖ Place with crosshair</button>
       <button data-action="toggle-show" class="${state.showMeasurements ? 'active' : ''}">${state.showMeasurements ? 'Hide' : 'Show'} measurements</button>
       <button data-action="toggle-measure" class="${state.measureMode ? 'active' : ''}">Measure to point</button>
       <button data-action="center">Center on map</button>
     </div>
-    <p class="hint">Drag the pin (tip = exact position), type coordinates, or use the arrow keys to nudge 1 cm (Shift: 10 cm).</p>`;
+    <p class="hint mouse-only">Drag the pin (tip = exact position), type coordinates, or use the arrow keys to nudge 1 cm (Shift: 10 cm).</p>
+    <p class="hint touch-only">Use <em>Place with crosshair</em> for precise positioning: move the map under the crosshair, then tap Set position.</p>`;
 
   if (state.showMeasurements || state.measurePoint) {
     const rows = anchors().filter((o) => o.id !== a.id)
@@ -623,13 +789,14 @@ function renderSelected() {
 
   if (a.type === 'approximate') {
     html += `<h4>Measured distances (tape / laser)</h4>
-      <p class="hint" style="margin-top:0">Press <em>+ Add measurement</em>, click the anchor you measured to on the plan, then type the horizontal distance in meters. Press Enter to save it and pick the next anchor. Three or more references that are not in a line give the best result.</p>`;
+      <p class="hint" style="margin-top:0">Press <em>+ Add measurement</em>, ${TAP.toLowerCase()} the anchor you measured to on the plan, then type the horizontal distance in meters. Press Enter to save it and pick the next anchor. Three or more references that are not in a line give the best result.</p>`;
     if (a.measurements.length) {
-      html += `<table class="table compact meas-table"><thead><tr><th>To anchor</th><th class="num">Measured</th><th class="num">On plan</th><th class="num">Residual</th><th></th></tr></thead>
-        <tbody>${measurementRowsHtml(a)}</tbody></table>`;
+      html += `<div class="table-x"><table class="table compact meas-table"><thead><tr><th>To anchor</th><th class="num">Measured</th><th class="num">On plan</th><th class="num">Residual</th><th></th></tr></thead>
+        <tbody>${measurementRowsHtml(a)}</tbody></table></div>`;
     }
+    const pickLabel = TOUCH ? 'Tap an anchor… (tap here to cancel)' : 'Click an anchor… (Esc to cancel)';
     html += `<div class="btn-row">
-        <button data-action="add-meas" class="${state.pickMode ? 'active' : ''}" ${anchors().length < 2 ? 'disabled' : ''}>${state.pickMode ? 'Click an anchor… (Esc to cancel)' : '+ Add measurement'}</button>
+        <button data-action="add-meas" class="${state.pickMode ? 'active' : ''}" ${anchors().length < 2 ? 'disabled' : ''}>${state.pickMode ? pickLabel : '+ Add measurement'}</button>
         <button class="primary" data-action="solve" ${a.measurements.length ? '' : 'disabled'}>Calculate position</button>
       </div>`;
     if (a.lastSolve) {
@@ -695,7 +862,7 @@ function updateLiveValues() {
 // ---------- persistence ----------
 async function patchAnchor(a, fields) {
   try {
-    const updated = await api('PATCH', '/api/anchors/' + a.id, fields);
+    const updated = await store.updateAnchor(a.id, fields);
     Object.assign(a, { serial: updated.serial, type: updated.type, updatedAt: updated.updatedAt });
     return true;
   } catch (err) { handleError(err); return false; }
@@ -736,10 +903,20 @@ panel.addEventListener('click', async (e) => {
       return;
     }
     case 'toggle-show': state.showMeasurements = !state.showMeasurements; break;
-    case 'toggle-measure': state.measureMode = !state.measureMode; state.pickMode = false; break;
+    case 'toggle-measure': cancelPlace(); state.measureMode = !state.measureMode; state.pickMode = false; break;
     case 'clear-point': state.measurePoint = null; break;
     case 'center': centerOn(a); return;
+    case 'place': if (state.placeMode) finishPlace(); else startPlace(a); return;
+    case 'nudge': {
+      if (state.locked) { toast('Pins are locked', true); return; }
+      if (state.placeMode) cancelPlace();
+      setPosition(a, a.x + Number(btn.dataset.dx) * state.nudgeStep, a.y + Number(btn.dataset.dy) * state.nudgeStep);
+      renderAnchorTable();
+      return;
+    }
+    case 'step': state.nudgeStep = Number(btn.dataset.step); break;
     case 'add-meas':
+      cancelPlace();
       state.pickMode = !state.pickMode;
       state.measureMode = false;
       break;
@@ -755,6 +932,7 @@ panel.addEventListener('click', async (e) => {
     case 'apply-solve': {
       const r = state.solve?.result;
       if (!r || r.error) return;
+      cancelPlace();
       a.x = r.x; a.y = r.y;
       a.lastSolve = { at: new Date().toISOString(), rms: r.rms, n: state.solve.rows.length };
       state.solve = null;
@@ -767,11 +945,11 @@ panel.addEventListener('click', async (e) => {
   renderAll();
 });
 
-// Called when, in pick mode, the user clicks an anchor (pin or table row).
+// Called when, in pick mode, the user picks an anchor (pin or table row).
 function pickMeasurementTarget(target) {
   const a = selected();
   if (!a || !target) return;
-  if (target.id === a.id) { toast('Click a different anchor – this is the one you are measuring from', true); return; }
+  if (target.id === a.id) { toast(`${TAP} a different anchor – this is the one you are measuring from`, true); return; }
   state.pickMode = false;
   let m = a.measurements.find((x) => x.toAnchorId === target.id);
   if (m) {
@@ -831,6 +1009,7 @@ panel.addEventListener('change', async (e) => {
   if (field === 'x' || field === 'y') {
     const v = parseFloat(el.value);
     if (!Number.isFinite(v)) { el.value = fmt(a[field], 3); return; }
+    cancelPlace();
     setPosition(a, field === 'x' ? v : a.x, field === 'y' ? v : a.y);
     renderAnchorTable();
   }
@@ -847,23 +1026,29 @@ panel.addEventListener('keydown', (e) => {
   renderAll();
 });
 
-// Hovering / focusing a measurement row highlights its target anchor on the plan.
+// Hovering / focusing / tapping a measurement row highlights its target anchor on the plan.
 function setHighlight(id) {
   if (state.highlightId === id) return;
   state.highlightId = id;
   renderPlan();
 }
 panel.addEventListener('mouseover', (e) => {
+  if (TOUCH) return;
   const row = e.target.closest('[data-target]');
   setHighlight(row?.dataset.target || null);
 });
 panel.addEventListener('mouseleave', () => {
+  if (TOUCH) return;
   const focusedRow = document.activeElement?.closest?.('[data-target]');
   setHighlight(focusedRow?.dataset.target || null);
 });
 panel.addEventListener('focusin', (e) => {
   const row = e.target.closest('[data-target]');
   if (row) setHighlight(row.dataset.target || null);
+});
+panel.addEventListener('pointerdown', (e) => {
+  const row = e.target.closest('[data-target]');
+  if (row && TOUCH) setHighlight(row.dataset.target || null);
 });
 
 // Live-update circles while typing a distance
@@ -897,7 +1082,8 @@ svg.addEventListener('pointerdown', (e) => {
   }
   if (pointers.size > 2 || e.button > 0) return;
 
-  const pinEl = e.target.closest('.pin');
+  // While placing with the crosshair, every gesture moves the map.
+  const pinEl = state.placeMode ? null : e.target.closest('.pin');
   if (pinEl && state.pickMode) {
     e.preventDefault(); // keep focus in the distance box we are about to focus
     pickMeasurementTarget(byId(pinEl.dataset.anchorId));
@@ -920,7 +1106,7 @@ svg.addEventListener('pointermove', (e) => {
   if (!state.plan) return;
   const [px, py] = pointerPos(e);
   const w = toWorld(px, py);
-  $('#cursor-readout').textContent = `x ${fmt(w.x)} m, y ${fmt(w.y)} m`;
+  if (!state.placeMode) $('#cursor-readout').textContent = `x ${fmt(w.x)} m, y ${fmt(w.y)} m`;
   if (!pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, { x: px, y: py });
 
@@ -981,31 +1167,45 @@ svg.addEventListener('pointerleave', () => { $('#cursor-readout').textContent = 
 svg.addEventListener('wheel', (e) => {
   if (!state.plan) return;
   e.preventDefault();
-  const [px, py] = pointerPos(e);
+  // While placing, zoom around the crosshair so the anchor doesn't move.
+  const [px, py] = state.placeMode ? viewerCenter() : pointerPos(e);
   zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015)), px, py);
 }, { passive: false });
 
 document.querySelector('.viewer-toolbar').addEventListener('click', (e) => {
   const z = e.target.closest('[data-zoom]')?.dataset.zoom;
   if (!z) return;
-  const r = viewer.getBoundingClientRect();
-  if (z === 'in') zoomAt(1.4, r.width / 2, r.height / 2);
-  if (z === 'out') zoomAt(1 / 1.4, r.width / 2, r.height / 2);
-  if (z === 'fit') { fitView(); renderPlan(); }
+  const [cx, cy] = viewerCenter();
+  if (z === 'in') zoomAt(1.4, cx, cy);
+  if (z === 'out') zoomAt(1 / 1.4, cx, cy);
+  if (z === 'fit') {
+    if (state.placeMode) { const a = byId(state.placeMode.id); fitView(); if (a) centerOn(a); }
+    else fitView();
+    renderPlan();
+  }
 });
-$('#lock-pins').addEventListener('change', (e) => { state.locked = e.target.checked; renderPlan(); });
+$('#lock-pins').addEventListener('change', (e) => {
+  state.locked = e.target.checked;
+  if (state.locked) cancelPlace();
+  renderAll();
+});
 
-// Keyboard: arrows nudge selected pin, Esc leaves measure mode.
+// Bottom sheet (phone layout): tap the handle to give the panel more room.
+$('#sheet-handle').addEventListener('click', () => document.body.classList.toggle('sheet-expanded'));
+
+// Keyboard: arrows nudge selected pin, Esc leaves the current mode.
 document.addEventListener('keydown', (e) => {
   if (!state.plan || $('#view-plan').hidden) return;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   if (e.key === 'Escape') {
+    if (state.placeMode) { cancelPlace(); return; }
     if (state.measureMode || state.pickMode) { state.measureMode = false; state.pickMode = false; renderAll(); }
     return;
   }
+  if (e.key === 'Enter' && state.placeMode) { finishPlace(); return; }
   const a = selected();
-  if (!a || state.locked) return;
+  if (!a || state.locked || state.placeMode) return;
   const step = e.shiftKey ? 0.1 : 0.01;
   const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
   if (!d) return;

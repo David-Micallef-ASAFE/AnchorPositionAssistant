@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "phone": "adb reverse tcp:3000 tcp:3000",
+    "icons": "node tools/make-icons.mjs",
     "test": "node --test test/"
   }
 }

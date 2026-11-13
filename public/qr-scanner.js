@@ -140,7 +140,11 @@ export function scanSerial() {
       if (done) { stopStream(); return; }
       video.srcObject = stream;
       await video.play().catch(() => {});
-      const activeId = stream.getVideoTracks()[0]?.getSettings().deviceId;
+      const settings = stream.getVideoTracks()[0]?.getSettings() ?? {};
+      const activeId = settings.deviceId;
+      // Mirror front/laptop cameras (feels natural), but not a phone's rear camera.
+      const facing = settings.facingMode || (matchMedia('(pointer: coarse)').matches ? 'environment' : 'user');
+      video.classList.toggle('mirror', facing === 'user');
       if (activeId) storageSet(CAMERA_KEY, activeId);
 
       // Camera labels are only available after permission is granted.
