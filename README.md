@@ -122,7 +122,7 @@ This is why the USB method is recommended.
    The pin stays under a fixed crosshair in the middle of the screen while you drag and pinch the map. Tap **Set position** when it is in place.
    *Place with crosshair* and the ← ↑ ↓ → nudge buttons (1 cm or 10 cm) are available for any selected anchor.
    **Tip:** press **📷 Scan** next to the serial field to read the anchor's QR code with the webcam.
-   `AS-123456` is entered as `123456`. If the anchor is already on the plan, it is selected instead.
+   `AS-123456` (or `RL-123456` on older devices) is entered as `123456`. If the anchor is already on the plan, it is selected instead.
    The browser asks for camera permission the first time. Scanning works offline, because the decoder (jsQR, Apache-2.0) is
    included in `public/vendor/`. The camera only works when the app is opened at `localhost`/`127.0.0.1`
    (or over HTTPS), not at a plain `http://<LAN-IP>` address.
