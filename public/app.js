@@ -282,9 +282,40 @@ const state = {
   locked: false,
   pickMode: false,       // waiting for the user to pick the anchor a measurement goes to
   highlightId: null,     // anchor highlighted on the plan (hovered measurement row)
-  placeMode: null,       // { id, orig: { x, y } } – positioning an anchor under the crosshair
+  placeMode: null,       // { id, orig: { x, y }, returnTo } – positioning an anchor under the crosshair
   nudgeStep: 0.01,
+  screen: 'map',         // phone layout: which screen is showing, 'map' or 'list'
+  pendingCenter: null,   // { x, y } to centre on once the (hidden) map is shown again
 };
+
+// ======================================================================
+// Phone layout: one screen at a time (map / anchors), switched by the tab bar.
+// On wider screens both are visible side by side and this only records the choice.
+// ======================================================================
+const singleScreen = matchMedia('(max-width: 760px)');
+
+function showScreen(name) {
+  state.screen = name;
+  document.body.dataset.screen = name;
+  for (const b of document.querySelectorAll('#screen-tabs [data-screen]')) b.classList.toggle('active', b.dataset.screen === name);
+  if (name === 'map' && state.plan) {
+    if (state.needsFit) fitView();
+    if (state.pendingCenter) { const p = state.pendingCenter; state.pendingCenter = null; centerOn(p); }
+    else renderPlan();
+  }
+}
+
+// Bring the selected anchor's panel into view (phone layout: after the anchor table).
+function revealSelectedPanel() {
+  if (!singleScreen.matches) return;
+  requestAnimationFrame(() => $('#selected-panel').scrollIntoView({ block: 'start', behavior: 'smooth' }));
+}
+
+document.querySelector('#screen-tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-screen]');
+  if (b) showScreen(b.dataset.screen);
+});
+showScreen('map');
 
 const svg = $('#plan-svg');
 const viewer = $('#viewer');
@@ -322,6 +353,8 @@ async function openPlan(id) {
   document.body.classList.add('plan-open');
   $('#view-home').hidden = true;
   $('#view-plan').hidden = false;
+  state.pendingCenter = null;
+  showScreen('map');
   $('#topbar-context').innerHTML = `<a href="#/" class="back-link">← <span class="hide-narrow">All floor plans</span></a>
     <strong class="plan-title">${esc(plan.name)}</strong><span class="hide-narrow">${fmt(plan.width)} × ${fmt(plan.height)} m</span>`;
   $('#plan-image').setAttribute('href', plan.imageUrl);
@@ -331,7 +364,8 @@ async function openPlan(id) {
 
 function fitView() {
   const r = viewer.getBoundingClientRect();
-  if (!state.plan || r.width === 0) return;
+  if (!state.plan) return;
+  if (r.width === 0) { state.needsFit = true; return; } // map hidden: fit when it is shown
   const pad = Math.min(50, r.width * 0.06);
   // Leave room at the top for the toolbar plus a pin's height, so pins on the top edge stay tappable.
   const tb = $('.viewer-toolbar').getBoundingClientRect();
@@ -357,6 +391,8 @@ function zoomAt(factor, sx, sy) {
 }
 
 function centerOn(a) {
+  // Map hidden (phone layout, anchors screen): do it when the map is shown.
+  if (viewer.getBoundingClientRect().width === 0) { state.pendingCenter = { x: a.x, y: a.y }; return; }
   const [cx, cy] = viewerCenter();
   const [sx, sy] = toScreen(a.x, a.y);
   state.view.tx += cx - sx;
@@ -366,17 +402,20 @@ function centerOn(a) {
 
 function isOnScreen(a) {
   const r = viewer.getBoundingClientRect();
+  if (r.width === 0) return false;
   const [sx, sy] = toScreen(a.x, a.y);
   return sx > 20 && sy > 50 && sx < r.width - 20 && sy < r.height - 10;
 }
 
 // Keep the point at the centre of the map fixed when the map area changes size
-// (window resize, phone rotation, the bottom sheet growing/shrinking).
+// (window resize, phone rotation).
 let lastViewerSize = null;
 new ResizeObserver(() => {
   const r = viewer.getBoundingClientRect();
-  // Only a real resize of a visible map shifts the view (not the map appearing after being hidden).
-  if (state.plan && lastViewerSize && lastViewerSize.w > 0 && lastViewerSize.h > 0 && !state.needsFit) {
+  // A hidden map (other screen / other page) has zero size: ignore it completely and keep the
+  // last real size, so hiding and showing the map never moves the view.
+  if (r.width === 0 || r.height === 0) return;
+  if (state.plan && lastViewerSize && !state.needsFit) {
     state.view.tx += (r.width - lastViewerSize.w) / 2;
     state.view.ty += (r.height - lastViewerSize.h) / 2;
   }
@@ -406,8 +445,9 @@ function renderPlan() {
     el.setAttribute('width', W * s); el.setAttribute('height', H * s);
   }
 
-  // Crosshair placement: the anchor being placed sits under the centre of the map.
-  if (state.placeMode) {
+  // Crosshair placement: the anchor being placed sits under the centre of the map
+  // (only while the map is actually visible).
+  if (state.placeMode && viewer.getBoundingClientRect().width > 0) {
     const a = byId(state.placeMode.id);
     if (a) {
       const w = toWorld(...viewerCenter());
@@ -496,12 +536,29 @@ function renderPlan() {
   const banner = $('#mode-banner');
   banner.hidden = !sel || !(state.measureMode || state.pickMode);
   if (!banner.hidden) {
-    const esc_ = TOUCH ? '' : ' Esc to cancel.';
-    banner.textContent = state.pickMode
-      ? `${TAP} the anchor you measured to from ${sel.serial} (on the plan or in the list).${esc_}`
-      : `${TAP} on the plan to measure from ${sel.serial}.${esc_}`;
+    $('#mode-text').textContent = state.pickMode
+      ? `${TAP} the anchor you measured to from ${sel.serial}.`
+      : `${TAP} on the plan to measure from ${sel.serial}.`;
+  }
+
+  // Phone layout: small bar showing the selected anchor, with a way back to its details.
+  const chip = $('#map-chip');
+  chip.hidden = !sel || !banner.hidden || !!state.placeMode;
+  if (!chip.hidden) {
+    $('#map-chip-text').innerHTML = `<span class="badge ${sel.type}">${sel.type === 'reference' ? 'Ref' : 'Approx'}</span>
+      <strong>${esc(sel.serial)}</strong> <span class="muted">x ${fmt(sel.x)}, y ${fmt(sel.y)}</span>`;
   }
 }
+
+// "Done" on the map banner leaves picking / measuring and returns to the anchor panel.
+$('#mode-done').addEventListener('click', () => {
+  state.pickMode = false;
+  state.measureMode = false;
+  renderAll();
+  showScreen('list');
+  revealSelectedPanel();
+});
+$('#map-chip-details').addEventListener('click', () => { showScreen('list'); revealSelectedPanel(); });
 
 // ======================================================================
 // Rendering: anchor table
@@ -528,6 +585,7 @@ function renderAnchorTable() {
   all.checked = list.length > 0 && ticked === list.length;
   all.indeterminate = ticked > 0 && ticked < list.length;
   all.disabled = list.length === 0;
+  $('#tab-count').textContent = anchors().length;
   const empty = $('#anchor-empty');
   empty.hidden = list.length > 0;
   empty.textContent = f && anchors().length ? 'No anchors match your search.' : 'No anchors yet. Add one above, then move its pin to where it is installed.';
@@ -560,6 +618,7 @@ $('#anchor-rows').addEventListener('click', async (e) => {
     selectAnchor(row.dataset.select);
     const a = selected();
     if (a && !isOnScreen(a)) centerOn(a);
+    revealSelectedPanel();
   }
 });
 
@@ -568,7 +627,9 @@ $('#anchor-form').addEventListener('submit', async (e) => {
   const form = e.target;
   const serial = form.serial.value.trim();
   if (!serial) return;
-  // Drop the new pin at the centre of the current view (clamped to the plan).
+  // The new pin goes on the map: switch to it (phone layout), then drop the pin at the
+  // centre of the current view (clamped to the plan).
+  showScreen('map');
   const c = toWorld(...viewerCenter());
   const x = clamp(c.x, 0, state.plan.width), y = clamp(c.y, 0, state.plan.height);
   try {
@@ -580,7 +641,7 @@ $('#anchor-form').addEventListener('submit', async (e) => {
     state.anchorFilter = ''; $('#anchor-search').value = '';
     selectAnchor(a.id);
     if (TOUCH) {
-      startPlace(a);
+      startPlace(a, 'list', true);
       toast(`Anchor ${a.serial} added – move the map so the crosshair is on its position`);
     } else {
       toast(`Anchor ${a.serial} added – drag the pin tip to the installed position`);
@@ -671,10 +732,13 @@ function selectAnchor(id) {
 // ======================================================================
 // Crosshair placement (precise positioning on touch screens; works with a mouse too)
 // ======================================================================
-function startPlace(a) {
+// returnTo: the screen to go back to afterwards in the phone layout ('list' or 'map').
+// isNew: a just-added anchor – go back to the top of the anchors screen, ready to add the next one.
+function startPlace(a, returnTo = state.screen, isNew = false) {
   state.pickMode = false;
   state.measureMode = false;
-  state.placeMode = { id: a.id, orig: { x: a.x, y: a.y } };
+  showScreen('map');
+  state.placeMode = { id: a.id, orig: { x: a.x, y: a.y }, returnTo, isNew };
   centerOn(a); // no jump: the pin starts exactly under the crosshair
   renderAll();
 }
@@ -686,6 +750,7 @@ function finishPlace() {
   const a = byId(pm.id);
   renderAll();
   if (a) patchAnchor(a, { x: a.x, y: a.y }).then((ok) => ok && toast(`Position of ${a.serial} saved`));
+  return pm;
 }
 
 function cancelPlace() {
@@ -695,10 +760,18 @@ function cancelPlace() {
   const a = byId(pm.id);
   if (a) { a.x = pm.orig.x; a.y = pm.orig.y; }
   if (state.plan) renderAll();
+  return pm;
 }
 
-$('#place-done').addEventListener('click', finishPlace);
-$('#place-cancel').addEventListener('click', cancelPlace);
+// The Set position / Cancel buttons also take you back to where placement was started.
+function backFromPlace(pm) {
+  if (!pm?.returnTo || pm.returnTo === state.screen) return;
+  showScreen(pm.returnTo);
+  if (pm.isNew) $('.sidebar').scrollTop = 0;
+  else revealSelectedPanel();
+}
+$('#place-done').addEventListener('click', () => backFromPlace(finishPlace()));
+$('#place-cancel').addEventListener('click', () => backFromPlace(cancelPlace()));
 
 // ======================================================================
 // Rendering: selected anchor panel
@@ -826,6 +899,7 @@ function solveResultHtml(a) {
       ${warnings.map((w) => `<div class="warn-box">${esc(w)}</div>`).join('')}
       <div class="btn-row">
         <button class="primary" data-action="apply-solve">Apply position</button>
+        <button data-action="show-solve">Show on map</button>
         <button data-action="discard-solve">Discard</button>
       </div>
     </div>`;
@@ -903,10 +977,21 @@ panel.addEventListener('click', async (e) => {
       return;
     }
     case 'toggle-show': state.showMeasurements = !state.showMeasurements; break;
-    case 'toggle-measure': cancelPlace(); state.measureMode = !state.measureMode; state.pickMode = false; break;
+    case 'toggle-measure':
+      cancelPlace();
+      state.measureMode = !state.measureMode;
+      state.pickMode = false;
+      if (state.measureMode) showScreen('map');
+      break;
     case 'clear-point': state.measurePoint = null; break;
-    case 'center': centerOn(a); return;
-    case 'place': if (state.placeMode) finishPlace(); else startPlace(a); return;
+    case 'center': showScreen('map'); centerOn(a); return;
+    case 'place': if (state.placeMode) finishPlace(); else startPlace(a, state.screen); return;
+    case 'show-solve': {
+      const r = state.solve?.result;
+      showScreen('map');
+      if (r && !r.error) centerOn(r);
+      return;
+    }
     case 'nudge': {
       if (state.locked) { toast('Pins are locked', true); return; }
       if (state.placeMode) cancelPlace();
@@ -919,6 +1004,7 @@ panel.addEventListener('click', async (e) => {
       cancelPlace();
       state.pickMode = !state.pickMode;
       state.measureMode = false;
+      if (state.pickMode) showScreen('map');
       break;
     case 'remove-meas': {
       const mid = btn.closest('[data-mid]').dataset.mid;
@@ -962,9 +1048,11 @@ function pickMeasurementTarget(target) {
   }
   state.highlightId = target.id;
   renderAll();
+  showScreen('list'); // phone layout: back to the panel to type the distance
   const input = panel.querySelector(`[data-mid="${m.id}"] input[data-field="distance"]`);
   input?.focus();
   input?.select();
+  input?.scrollIntoView({ block: 'center' });
 }
 
 function runSolve(a) {
@@ -1024,6 +1112,7 @@ panel.addEventListener('keydown', (e) => {
   state.pickMode = true;
   state.measureMode = false;
   renderAll();
+  showScreen('map'); // phone layout: straight to the map to pick the next anchor
 });
 
 // Hovering / focusing / tapping a measurement row highlights its target anchor on the plan.
@@ -1190,8 +1279,6 @@ $('#lock-pins').addEventListener('change', (e) => {
   renderAll();
 });
 
-// Bottom sheet (phone layout): tap the handle to give the panel more room.
-$('#sheet-handle').addEventListener('click', () => document.body.classList.toggle('sheet-expanded'));
 
 // Keyboard: arrows nudge selected pin, Esc leaves the current mode.
 document.addEventListener('keydown', (e) => {

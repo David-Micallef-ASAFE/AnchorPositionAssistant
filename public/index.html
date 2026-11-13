@@ -90,7 +90,14 @@
         <label class="lock"><input type="checkbox" id="lock-pins" /> Lock pins</label>
       </div>
       <div id="cursor-readout" class="cursor-readout"></div>
-      <div id="mode-banner" class="mode-banner" hidden></div>
+      <div id="mode-banner" class="mode-banner" hidden>
+        <span id="mode-text"></span>
+        <button id="mode-done" class="small">Done</button>
+      </div>
+      <div id="map-chip" class="map-chip" hidden>
+        <span id="map-chip-text"></span>
+        <button id="map-chip-details" class="small">Details ›</button>
+      </div>
       <div id="place-bar" class="place-bar" hidden>
         <div class="place-text">Move the map so the crosshair is exactly on the anchor's position.</div>
         <div id="place-readout" class="place-readout"></div>
@@ -102,7 +109,6 @@
     </section>
 
     <aside class="sidebar">
-      <button id="sheet-handle" class="sheet-handle" aria-label="Expand or shrink the panel"><span></span></button>
       <section class="panel">
         <h3>Anchors
           <button id="export-csv" class="small" style="margin-left:auto" title="Download the anchors ticked for export as CSV">Export CSV</button>
@@ -130,6 +136,12 @@
 
       <section class="panel" id="selected-panel" hidden></section>
     </aside>
+
+    <!-- Phone layout: one screen at a time, switched with this tab bar -->
+    <nav id="screen-tabs" class="screen-tabs">
+      <button data-screen="map"><span class="tab-icon">🗺</span> Map</button>
+      <button data-screen="list"><span class="tab-icon">☰</span> Anchors <span id="tab-count" class="tab-count"></span></button>
+    </nav>
   </main>
 
   <div id="toast" class="toast" hidden></div>

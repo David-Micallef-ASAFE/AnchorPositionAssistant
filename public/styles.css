@@ -212,7 +212,27 @@ body.touch .table input[type=checkbox] { width: 22px; height: 22px; }
 .place-buttons { display: flex; gap: 6px; }
 body.placing .cursor-readout, .cursor-readout:empty { display: none; }
 
-.sheet-handle { display: none; }
+/* phone single-screen pieces (shown only in the phone layout below) */
+.screen-tabs {
+  display: none; flex: none; border-top: 1px solid var(--border); background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.screen-tabs button {
+  flex: 1; border: none; border-radius: 0; background: none; padding: 10px 0; font-weight: 600; color: var(--muted);
+  border-top: 3px solid transparent; min-height: 52px;
+}
+.screen-tabs button.active { color: var(--primary); border-top-color: var(--primary); background: #f8fafc; }
+.tab-icon { font-size: 16px; }
+.tab-count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: #e2e8f0; color: var(--text); font-size: 11px; }
+.map-chip {
+  display: none; position: absolute; left: 10px; right: 10px; bottom: 10px; margin: 0 auto; max-width: 520px;
+  background: var(--surface); border-radius: 10px; padding: 8px 10px 8px 12px; box-shadow: 0 2px 10px rgba(0,0,0,.2);
+  align-items: center; gap: 10px;
+}
+#map-chip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mode-banner { display: flex; align-items: center; gap: 10px; }
+.mode-banner #mode-text { flex: 1; }
+.mode-banner button { pointer-events: auto; background: #fff; color: #4c1d95; border-color: #fff; }
 
 /* ---------- phone layout ---------- */
 @media (max-width: 760px) {
@@ -231,20 +251,16 @@ body.placing .cursor-readout, .cursor-readout:empty { display: none; }
   .card-head-tools input { flex: 1; width: auto; }
   .col-created { display: none; }
 
+  /* Single-screen layout: either the map or the anchor panel fills the screen. */
   .plan-view { flex-direction: column; }
   .viewer-wrap { flex: 1; min-height: 0; }
-  .sidebar {
-    width: 100%; height: 42vh; flex: none; border-left: none; border-top: 1px solid var(--border);
-    box-shadow: 0 -4px 12px rgba(0,0,0,.08); transition: height .2s;
-  }
-  body.sheet-expanded .sidebar { height: 78vh; }
-  body.placing .sidebar { display: none; }
-  .sheet-handle {
-    display: flex; justify-content: center; width: 100%; border: none; border-radius: 0; padding: 8px 0 4px;
-    background: var(--surface); position: sticky; top: 0; z-index: 2; min-height: 0 !important;
-  }
-  .sheet-handle span { width: 44px; height: 5px; border-radius: 3px; background: #cbd5e1; }
-  .panel { padding: 8px 12px 12px; }
+  .sidebar { width: 100%; flex: 1; min-height: 0; border-left: none; }
+  body[data-screen="map"] .sidebar { display: none; }
+  body[data-screen="list"] .viewer-wrap { display: none; }
+  .screen-tabs { display: flex; }
+  body.placing .screen-tabs { display: none; }
+  .map-chip { display: flex; }
+  .panel { padding: 10px 12px 12px; }
   .panel h3 { flex-wrap: wrap; }
   .anchor-form { flex-wrap: wrap; }
   .anchor-form input { flex: 1 1 calc(100% - 120px); }

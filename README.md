@@ -24,7 +24,17 @@ Set `DATA_DIR=<folder>` to keep the data somewhere else.
 | `http://localhost:3000/app/` | The phone app (Android). It is installable and works offline | On the phone only |
 
 Both versions have the same features. On a touch screen the app also shows a crosshair for precise placement,
-nudge buttons and larger touch targets. On a narrow screen, the panel slides up from the bottom.
+nudge buttons and larger touch targets.
+
+On a narrow screen (a phone, or a small tablet in portrait), the plan view shows **one screen at a time**: the **Map**
+or the **Anchors** panel. A tab bar at the bottom switches between them, and the app also switches by itself where that makes sense:
+- Adding an anchor, *Place with crosshair*, *Measure to point*, *Center on map* and *Show on map* open the map.
+  *Set position* or *Cancel* returns to the anchors screen.
+- *+ Add measurement* opens the map so you can tap the anchor you measured to. It then returns to the anchors screen
+  with the distance box ready, and **Enter** goes back to the map for the next anchor. **Done** on the map banner stops picking.
+- On the map, a bar shows the selected anchor. **Details ›** opens its panel.
+
+Wider screens (laptops, larger tablets) show the map and the panel side by side.
 
 ## Installing the phone app (Android, one time per phone)
 
