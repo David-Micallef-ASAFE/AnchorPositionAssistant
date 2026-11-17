@@ -16,6 +16,7 @@ export async function exportPlanFile(store, planId) {
     exportedAt: new Date().toISOString(),
     plan: { name: plan.name, width: plan.width, height: plan.height, createdAt: plan.createdAt },
     image: await blobToDataUrl(image),
+    suggested: plan.suggested ?? [],
     // Measurements reference other anchors by serial, so ids can be regenerated on import.
     anchors: plan.anchors.map((a) => ({
       serial: a.serial,
@@ -76,6 +77,7 @@ export async function importPlanFile(store, text, { name, prepareImage } = {}) {
       idBySerial.set(String(a.serial).trim(), created.id);
       if (a.lastSolve) await store.updateAnchor(created.id, { lastSolve: a.lastSolve });
     }
+    if (Array.isArray(data.suggested) && data.suggested.length) await store.setSuggested(plan.id, data.suggested);
     for (const a of data.anchors) {
       const ms = (a.measurements || [])
         .filter((m) => idBySerial.has(m.toSerial))

@@ -154,7 +154,18 @@ This is why the USB method is recommended.
    - **Export SQL**: one statement per anchor, ready to run against the device database:
      `update device set space_coordinates=(10,25.3) where serial_number='123456';`
      Coordinates are in meters, rounded to the millimeter, with no trailing zeros.
-6. **Backup / move a plan**: **Backup** in the floor plan list saves the whole plan as one `.apaplan.json` file.
+6. **Engineer's suggested positions (optional)**: if the engineer supplied a CSV of where the anchors should go,
+   press **CSV** on the map toolbar and choose the file. Each row has a name and X, Y in meters, for example:
+   ```
+   Anchor,X,Y
+   G01,29.51,28.85
+   ```
+   The header row is optional and the columns are found by name. Semicolon or tab separators and decimal commas also work.
+   The positions are shown as **red diamonds** (centre = position) labelled with their names. They are only a guide,
+   so the installer can still place each anchor where it actually fits on site. The **Suggested** checkbox shows or hides them.
+   It is disabled until a CSV has been loaded for the plan. Loading another CSV replaces the previous positions.
+   They are saved with the plan, included in backups, and are not exported.
+7. **Backup / move a plan**: **Backup** in the floor plan list saves the whole plan as one `.apaplan.json` file.
    The file contains the image, the anchors with their export ticks and the measurements. **Import plan** loads such a file as a new plan.
    This works in both versions, so you can move a plan from the phone to the laptop or the other way.
 

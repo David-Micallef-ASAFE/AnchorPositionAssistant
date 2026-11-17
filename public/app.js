@@ -3,6 +3,7 @@ import { checkGeometry } from './geometry.js';
 import { CALCULATION_RULES } from './config.js';
 import { scanSerial } from './qr-scanner.js';
 import { cleanSerial, defaultExport } from './serial.js';
+import { parseSuggestedCsv } from './suggested.js';
 import { buildCsv, buildSql, isExported, sortAnchors } from './exporters.js';
 import { createServerStore, createLocalStore } from './store.js';
 import { exportPlanFile, importPlanFile, PLAN_FILE_EXT } from './planfile.js';
@@ -324,6 +325,7 @@ const state = {
   nudgeStep: 0.01,
   screen: 'map',         // phone layout: which screen is showing, 'map' or 'list'
   pendingCenter: null,   // { x, y } to centre on once the (hidden) map is shown again
+  showSuggested: false,  // show the engineer's suggested positions (red diamonds)
 };
 
 // ======================================================================
@@ -388,6 +390,8 @@ async function openPlan(id) {
     pickMode: false, highlightId: null,
   });
   $('#anchor-search').value = '';
+  state.showSuggested = (plan.suggested?.length ?? 0) > 0 && readShowSuggested(plan.id);
+  renderSuggestedControls();
   document.body.classList.add('plan-open');
   $('#view-home').hidden = true;
   $('#view-plan').hidden = false;
@@ -637,6 +641,15 @@ function renderPlan() {
     labels += `<text class="pin-label" x="${sx}" y="${sy - 43}" text-anchor="middle">${esc(a.serial)}</text>`;
   }
 
+  // Engineer's suggested positions: red diamonds (centre = position) with their names, under the pins.
+  let sugg = '';
+  if (state.showSuggested && state.plan.suggested?.length) {
+    for (const p of state.plan.suggested) {
+      const [sx, sy] = toScreen(p.x, p.y);
+      sugg += `<g class="sugg" transform="translate(${sx},${sy})"><path d="M0,-8 L8,0 L0,8 L-8,0 Z"/><text x="11" y="4">${esc(p.name)}</text></g>`;
+    }
+  }
+  $('#layer-suggested').innerHTML = sugg;
   $('#layer-lines').innerHTML = lines;
   $('#layer-pins').innerHTML = ghost + pins;
   $('#layer-labels').innerHTML = labels;
@@ -1515,6 +1528,55 @@ document.querySelector('.viewer-toolbar').addEventListener('click', (e) => {
     renderPlan();
   }
 });
+// ---------- engineer's suggested positions (CSV) ----------
+const SUGG_KEY = 'aps-show-suggested:';
+function readShowSuggested(planId) {
+  try { return localStorage.getItem(SUGG_KEY + planId) !== '0'; } catch { return true; }
+}
+function writeShowSuggested(planId, on) {
+  try { localStorage.setItem(SUGG_KEY + planId, on ? '1' : '0'); } catch {}
+}
+function renderSuggestedControls() {
+  const n = state.plan?.suggested?.length ?? 0;
+  const box = $('#show-suggested');
+  box.disabled = n === 0;
+  box.checked = n > 0 && state.showSuggested;
+  $('#suggested-count').textContent = n ? ` (${n})` : '';
+  box.closest('label').title = n
+    ? `Show the engineer's ${n} suggested positions as red diamonds`
+    : "Load the engineer's CSV first";
+  box.closest('label').classList.toggle('disabled', n === 0);
+}
+
+$('#show-suggested').addEventListener('change', (e) => {
+  state.showSuggested = e.target.checked;
+  writeShowSuggested(state.plan.id, state.showSuggested);
+  renderPlan();
+});
+$('#load-suggested').addEventListener('click', () => $('#suggested-file').click());
+$('#suggested-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || !state.plan) return;
+  try {
+    const { positions, skipped } = parseSuggestedCsv(await file.text());
+    const old = state.plan.suggested?.length ?? 0;
+    if (old && !confirm(`Replace the ${old} suggested positions with the ${positions.length} in ${file.name}?`)) return;
+    const updated = await store.setSuggested(state.plan.id, positions);
+    state.plan.suggested = updated.suggested;
+    state.showSuggested = true;
+    writeShowSuggested(state.plan.id, true);
+    renderSuggestedControls();
+    renderPlan();
+    const W = state.plan.width, H = state.plan.height;
+    const outside = positions.filter((p) => p.x < 0 || p.y < 0 || p.x > W || p.y > H).length;
+    let msg = `Loaded ${positions.length} suggested positions${old ? ` (replaced ${old})` : ''}`;
+    if (skipped.length) msg += ` – skipped line(s) ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? '…' : ''}`;
+    if (outside) msg += ` – ${outside} outside the plan`;
+    toast(msg, skipped.length > 0 || outside > 0);
+  } catch (err) { handleError(err); }
+});
+
 $('#lock-pins').addEventListener('change', (e) => {
   state.locked = e.target.checked;
   if (state.locked) cancelPlace();

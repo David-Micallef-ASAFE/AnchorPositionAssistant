@@ -5,6 +5,7 @@
 //   createPlan({ name, width, height, image: Blob })  -> plan
 //   deletePlan(id)
 //   replacePlanImage(id, image: Blob) -> plan (with the new imageUrl)
+//   setSuggested(id, positions)     -> plan  (engineer's suggested positions, replaces the old list)
 //   createAnchor(planId, fields)    -> anchor
 //   updateAnchor(id, fields)        -> anchor
 //   deleteAnchor(id)                (also removes measurements that point to it)
@@ -13,7 +14,7 @@
 // createServerStore(): the laptop web app, talking to server.js.
 // createLocalStore():  the phone app, keeping everything in the browser's IndexedDB on the device.
 
-import { validatePlanFields, validateAnchorFields, duplicateSerialMessage } from './validation.js';
+import { validatePlanFields, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from './validation.js';
 
 export async function blobToDataUrl(blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -53,6 +54,9 @@ export function createServerStore() {
     async replacePlanImage(id, image) {
       if (!isImageType(image?.type)) throw new Error('Image must be a PNG or JPEG');
       return withUrl(await api('PUT', `/api/floorplans/${encodeURIComponent(id)}/image`, { image: await blobToDataUrl(image) }));
+    },
+    async setSuggested(id, positions) {
+      return withUrl(await api('PUT', `/api/floorplans/${encodeURIComponent(id)}/suggested`, { positions }));
     },
     createAnchor: (planId, fields) => api('POST', `/api/floorplans/${encodeURIComponent(planId)}/anchors`, fields),
     updateAnchor: (id, fields) => api('PATCH', '/api/anchors/' + encodeURIComponent(id), fields),
@@ -194,6 +198,19 @@ export function createLocalStore() {
         return p;
       });
       dropUrl(id);
+      return { ...plan, imageUrl: await imageUrlFor(id) };
+    },
+
+    async setSuggested(id, positions) {
+      const v = validateSuggestedPositions(positions);
+      if (v.error) throw new HttpLikeError(v.error);
+      const plan = await tx(dbP, ['floorplans'], 'readwrite', async (s) => {
+        const p = await reqP(s.floorplans.get(id));
+        if (!p) throw new HttpLikeError('Floor plan not found');
+        Object.assign(p, { suggested: v.value, updatedAt: now() });
+        s.floorplans.put(p);
+        return p;
+      });
       return { ...plan, imageUrl: await imageUrlFor(id) };
     },
 

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { validatePlanFields, validateAnchorFields, duplicateSerialMessage } from './public/validation.js';
+import { validatePlanFields, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from './public/validation.js';
 import { serviceWorkerSource } from './tools/buildhash.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -162,6 +162,17 @@ async function handleApi(req, res, url) {
         fs.rm(path.join(IMAGE_DIR, fp.imageFile), { force: true }, () => {});
         return send(res, 204);
       }
+    }
+
+    // Replace the engineer's suggested positions (an empty list removes them).
+    if (parts.length === 4 && parts[3] === 'suggested' && method === 'PUT') {
+      const body = await readJson(req);
+      const v = validateSuggestedPositions(body.positions);
+      if (v.error) return fail(res, 400, v.error);
+      fp.suggested = v.value;
+      fp.updatedAt = now();
+      saveDb();
+      return send(res, 200, planWithCounts(fp));
     }
 
     // Replace the image (e.g. with an optimized, smaller version). Anchor positions are in

@@ -295,6 +295,11 @@ body.placing .cursor-readout, .cursor-readout:empty { display: none; }
 .calc-info th { text-align: left; font-weight: 400; color: #475569; padding: 2px 10px 2px 0; white-space: nowrap; }
 .calc-info td { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding: 2px 0; white-space: nowrap; }
 .calc-info td.muted { font-weight: 400; padding-left: 10px; color: #94a3b8; }
+.sugg path { fill: #dc2626; stroke: #fff; stroke-width: 1.5px; }
+.sugg text { font-size: 11px; font-weight: 600; fill: #b91c1c; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+#layer-suggested { pointer-events: none; }
+.diamond-icon { display: inline-block; width: 8px; height: 8px; background: #dc2626; transform: rotate(45deg); margin: 0 3px 0 1px; }
+.suggested-toggle.disabled { opacity: .5; }
 .brand-version { font-weight: 400; font-size: 12px; opacity: .7; }
 .warn-box.bad { border-color: #fca5a5; background: #fef2f2; }
 .result-box.rejected { border-color: #fca5a5; background: #fff7f7; }

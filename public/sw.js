@@ -20,6 +20,7 @@ const FILES = [
   'config.js',
   'qr-scanner.js',
   'serial.js',
+  'suggested.js',
   'exporters.js',
   'styles.css',
   'manifest.webmanifest',

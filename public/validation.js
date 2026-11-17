@@ -58,4 +58,18 @@ export function validateAnchorFields(body, partial) {
   return { value: out };
 }
 
+// The engineer's suggested positions for a plan: [{ name, x, y }] (may be empty). Returns { value } or { error }.
+export function validateSuggestedPositions(list) {
+  if (!Array.isArray(list)) return { error: 'positions must be an array' };
+  if (list.length > 10000) return { error: 'Too many suggested positions (max 10000)' };
+  const out = [];
+  for (const p of list) {
+    const name = typeof p?.name === 'string' ? p.name.trim() : '';
+    if (!name) return { error: 'Each suggested position needs a name' };
+    if (!isNum(p.x) || !isNum(p.y)) return { error: `Suggested position ${name}: x and y must be numbers` };
+    out.push({ name, x: p.x, y: p.y });
+  }
+  return { value: out };
+}
+
 export const duplicateSerialMessage = (serial) => `Anchor ${serial} already exists on this floor plan`;

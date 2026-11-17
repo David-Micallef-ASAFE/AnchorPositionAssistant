@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { exportPlanFile, importPlanFile, parsePlanFile } from '../public/planfile.js';
-import { validatePlanFields, validateAnchorFields, duplicateSerialMessage } from '../public/validation.js';
+import { validatePlanFields, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from '../public/validation.js';
 
 // Minimal in-memory store with the same interface (and validation) as the real ones.
 function memoryStore() {
@@ -18,6 +18,13 @@ function memoryStore() {
       const p = { id: crypto.randomUUID(), ...v.value, createdAt: new Date().toISOString() };
       plans.set(p.id, p); images.set(p.id, image);
       return p;
+    },
+    async setSuggested(id, positions) {
+      const v = validateSuggestedPositions(positions);
+      if (v.error) throw new Error(v.error);
+      const p = plans.get(id);
+      p.suggested = v.value;
+      return { ...p };
     },
     async deletePlan(id) { plans.delete(id); for (const [k, a] of anchors) if (a.floorplanId === id) anchors.delete(k); },
     async createAnchor(planId, fields) {
@@ -115,4 +122,19 @@ test('importing an older file with AS- serials keeps the measurements', async ()
   assert.deepEqual(Object.keys(bySerial).sort(), ['100', '200']);
   assert.equal(bySerial['200'].measurements.length, 1);
   assert.equal(bySerial['200'].measurements[0].toAnchorId, bySerial['100'].id);
+});
+
+test('suggested positions are kept in the plan file', async () => {
+  const src = memoryStore();
+  const plan = await src.createPlan({ name: 'With CSV', width: 70, height: 50, image: PNG });
+  await src.setSuggested(plan.id, [{ name: 'G01', x: 29.51, y: 28.85 }, { name: 'M03', x: 57.74, y: 43.02 }]);
+  const { json } = await exportPlanFile(src, plan.id);
+  const dst = memoryStore();
+  const got = await dst.getPlan((await importPlanFile(dst, json)).id);
+  assert.deepEqual(got.suggested, [{ name: 'G01', x: 29.51, y: 28.85 }, { name: 'M03', x: 57.74, y: 43.02 }]);
+
+  // a plan without them stays without them
+  const bare = await src.createPlan({ name: 'No CSV', width: 10, height: 10, image: PNG });
+  const got2 = await dst.getPlan((await importPlanFile(dst, (await exportPlanFile(src, bare.id)).json)).id);
+  assert.equal(got2.suggested?.length ?? 0, 0);
 });
