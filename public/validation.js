@@ -1,6 +1,8 @@
 // Validation rules shared by the Node server and the on-device (phone) storage,
 // so both storage back ends accept and reject exactly the same data.
 
+import { cleanSerial, defaultExport } from './serial.js';
+
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const newId = () => globalThis.crypto.randomUUID();
 
@@ -17,10 +19,13 @@ export function validatePlanFields(body) {
 export function validateAnchorFields(body, partial) {
   const out = {};
   if (!partial || 'serial' in body) {
-    const s = typeof body.serial === 'string' ? body.serial.trim() : '';
+    // A leading AS- / RL- (from the label, e.g. typed by a USB scanner) is removed.
+    const s = typeof body.serial === 'string' ? cleanSerial(body.serial) : '';
     if (!s) return { error: 'Serial number is required' };
     out.serial = s;
   }
+  // New anchors: exported by default only when the serial has no letters (12345 yes, COL123 no).
+  if (!partial && !('export' in body)) out.export = defaultExport(out.serial);
   if (!partial || 'type' in body) {
     if (body.type !== 'reference' && body.type !== 'approximate') return { error: 'Type must be "reference" or "approximate"' };
     out.type = body.type;

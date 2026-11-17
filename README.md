@@ -123,6 +123,8 @@ This is why the USB method is recommended.
    *Place with crosshair* and the ← ↑ ↓ → nudge buttons (1 cm or 10 cm) are available for any selected anchor.
    **Tip:** press **📷 Scan** next to the serial field to read the anchor's QR code with the webcam.
    `AS-123456` (or `RL-123456` on older devices) is entered as `123456`. If the anchor is already on the plan, it is selected instead.
+   **Handheld USB scanners** work too: click in the serial field and scan. The scanner types the label text,
+   and a leading `AS-` or `RL-` is removed automatically, so `AS-123456` is stored as `123456`. This also applies to typed serials and to renaming.
    The browser asks for camera permission the first time. Scanning works offline, because the decoder (jsQR, Apache-2.0) is
    included in `public/vendor/`. The camera only works when the app is opened at `localhost`/`127.0.0.1`
    (or over HTTPS), not at a plain `http://<LAN-IP>` address.
@@ -143,8 +145,9 @@ This is why the USB method is recommended.
 4. **Check positions**: select any anchor and press **Show measurements** to see its distance to every other anchor on the plan.
    **Measure to point** gives the distance from the anchor to any spot you click, such as a wall.
 
-5. **Export**: the **Export** checkbox column in the anchor table chooses which anchors are exported. It is ticked by default,
-   and the header checkbox ticks or unticks all listed anchors. Next to *Anchors* there are two export buttons:
+5. **Export**: the **Export** checkbox column in the anchor table chooses which anchors are exported.
+   A new anchor is ticked when its serial is a number (`12345`) and unticked when it contains letters (`COL123`),
+   because such names are usually helper points rather than devices. You can change the tick at any time. The header checkbox ticks or unticks all listed anchors. Next to *Anchors* there are two export buttons:
    - **Export CSV**: one row per anchor with the floor plan, serial, type, X/Y (m), position calculated (Yes/No, approximate anchors only),
      number of measurements, and the metrics logged with the last applied calculation: time, RMS and max residual,
      anchors used, reference anchors used, effective anchor count and HDOP.

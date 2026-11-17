@@ -99,3 +99,20 @@ test('a failed import does not leave a half-imported plan', async () => {
   await assert.rejects(importPlanFile(dst, bad), /already exists/);
   assert.equal(dst._plans.size, 0);
 });
+
+test('importing an older file with AS- serials keeps the measurements', async () => {
+  const src = memoryStore();
+  const plan = await src.createPlan({ name: 'Old', width: 10, height: 10, image: PNG });
+  const json = JSON.parse((await exportPlanFile(src, plan.id)).json);
+  json.anchors = [
+    { serial: 'AS-100', type: 'reference', x: 1, y: 1, export: true, measurements: [] },
+    { serial: 'AS-200', type: 'approximate', x: 5, y: 5, export: true, measurements: [{ toSerial: 'AS-100', distance: 5.6 }] },
+  ];
+  const dst = memoryStore();
+  const imported = await importPlanFile(dst, JSON.stringify(json));
+  const got = await dst.getPlan(imported.id);
+  const bySerial = Object.fromEntries(got.anchors.map((a) => [a.serial, a]));
+  assert.deepEqual(Object.keys(bySerial).sort(), ['100', '200']);
+  assert.equal(bySerial['200'].measurements.length, 1);
+  assert.equal(bySerial['200'].measurements[0].toAnchorId, bySerial['100'].id);
+});

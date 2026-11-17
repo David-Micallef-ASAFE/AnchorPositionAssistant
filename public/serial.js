@@ -10,3 +10,16 @@ export function parseSerial(text) {
   if (/^\d{3,}$/.test(s)) return s;
   return null;
 }
+
+// Clean a serial that was typed, or entered by a handheld USB scanner (which types the label
+// text, e.g. "AS-123456"): a leading AS- or RL- prefix is removed. Anything else is kept as is,
+// so names such as "COL123" are not changed.
+export function cleanSerial(text) {
+  const s = String(text ?? '').trim();
+  const m = /^(?:AS|RL)-\s*(\S.*)$/i.exec(s);
+  return m ? m[1].trim() : s;
+}
+
+// New anchors are ticked for export only when their serial has no letters: device serials are
+// numbers (12345), while names such as "COL123" are usually helper points, not devices.
+export const defaultExport = (serial) => !/\p{L}/u.test(String(serial));

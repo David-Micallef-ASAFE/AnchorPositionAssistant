@@ -2,6 +2,7 @@ import { solvePosition } from './trilateration.js';
 import { checkGeometry } from './geometry.js';
 import { CALCULATION_RULES } from './config.js';
 import { scanSerial } from './qr-scanner.js';
+import { cleanSerial, defaultExport } from './serial.js';
 import { buildCsv, buildSql, isExported, sortAnchors } from './exporters.js';
 import { createServerStore, createLocalStore } from './store.js';
 import { exportPlanFile, importPlanFile, PLAN_FILE_EXT } from './planfile.js';
@@ -801,7 +802,8 @@ $('#anchor-rows').addEventListener('click', async (e) => {
 $('#anchor-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
-  const serial = form.serial.value.trim();
+  const serial = cleanSerial(form.serial.value);
+  form.serial.value = serial;
   if (!serial) return;
   // The new pin goes on the map: switch to it (phone layout), then drop the pin at the
   // centre of the current view (clamped to the plan).
@@ -822,8 +824,12 @@ $('#anchor-form').addEventListener('submit', async (e) => {
     } else {
       toast(`Anchor ${a.serial} added – drag the pin tip to the installed position`);
     }
+    if (!defaultExport(a.serial)) setTimeout(() => toast(`${a.serial} contains letters, so it is not ticked for export`), 2500);
   } catch (err) { handleError(err); }
 });
+
+// A handheld USB scanner types the label text ("AS-123456"): show the cleaned serial straight away.
+$('#anchor-form').serial.addEventListener('change', (e) => { e.target.value = cleanSerial(e.target.value); });
 
 // ---------- QR scan for the serial number ----------
 $('#scan-serial').addEventListener('click', async () => {
@@ -1320,7 +1326,7 @@ panel.addEventListener('change', async (e) => {
     return;
   }
   if (field === 'serial') {
-    const serial = el.value.trim();
+    const serial = cleanSerial(el.value);
     if (!serial || serial === a.serial) { el.value = a.serial; return; }
     const prev = a.serial;
     a.serial = serial;

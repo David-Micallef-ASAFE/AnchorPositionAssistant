@@ -71,7 +71,9 @@ export async function importPlanFile(store, text, { name, prepareImage } = {}) {
       const created = await store.createAnchor(plan.id, {
         serial: a.serial, type: a.type, x: a.x, y: a.y, export: a.export !== false, calculated: a.calculated === true,
       });
-      idBySerial.set(created.serial, created.id);
+      // Keyed by the serial as written in the file: measurements refer to it that way, even when
+      // the stored serial was cleaned (e.g. "AS-123456" -> "123456").
+      idBySerial.set(String(a.serial).trim(), created.id);
       if (a.lastSolve) await store.updateAnchor(created.id, { lastSolve: a.lastSolve });
     }
     for (const a of data.anchors) {
