@@ -294,6 +294,8 @@ uploadForm.addEventListener('submit', async (e) => {
       name: uploadForm.name.value.trim(),
       width: parseFloat(uploadForm.width.value),
       height: parseFloat(uploadForm.height.value),
+      tenantId: uploadForm.tenantId.value.trim() || null,
+      spaceId: uploadForm.spaceId.value.trim() || null,
       image: uploadImg.file,
     });
     uploadForm.reset();
@@ -390,6 +392,9 @@ async function openPlan(id) {
     pickMode: false, highlightId: null,
   });
   $('#anchor-search').value = '';
+  $('#plan-tenant').value = plan.tenantId ?? '';
+  $('#plan-space').value = plan.spaceId ?? '';
+  for (const el of document.querySelectorAll('[data-plan-id-field]')) el.classList.remove('invalid');
   state.showSuggested = (plan.suggested?.length ?? 0) > 0 && readShowSuggested(plan.id);
   renderSuggestedControls();
   document.body.classList.add('plan-open');
@@ -890,7 +895,7 @@ $('#export-csv').addEventListener('click', () => {
 $('#export-sql').addEventListener('click', () => {
   const list = anchorsForExport();
   if (!list) return;
-  downloadFile(buildSql(state.plan.name, list), exportName('sql'), 'application/sql;charset=utf-8');
+  downloadFile(buildSql(state.plan.name, list, new Date(), { tenantId: state.plan.tenantId, spaceId: state.plan.spaceId }), exportName('sql'), 'application/sql;charset=utf-8');
   exportedToast(list);
 });
 
@@ -1528,6 +1533,27 @@ document.querySelector('.viewer-toolbar').addEventListener('click', (e) => {
     renderPlan();
   }
 });
+// ---------- tenant / space IDs of the floor plan (used in the SQL export) ----------
+for (const el of document.querySelectorAll('[data-plan-id-field]')) {
+  el.addEventListener('change', async () => {
+    if (!state.plan) return;
+    const key = el.dataset.planIdField;
+    const value = el.value.trim();
+    if ((state.plan[key] ?? '') === value.toLowerCase()) { el.value = state.plan[key] ?? ''; el.classList.remove('invalid'); return; }
+    try {
+      const updated = await store.updatePlan(state.plan.id, { [key]: value || null });
+      state.plan[key] = updated[key] ?? null;
+      el.value = state.plan[key] ?? '';
+      el.classList.remove('invalid');
+      toast(`${key === 'tenantId' ? 'Tenant' : 'Space'} ID ${state.plan[key] ? 'saved' : 'cleared – it will be left out of the SQL'}`);
+    } catch (err) {
+      el.classList.add('invalid');
+      handleError(err);
+    }
+  });
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
+}
+
 // ---------- engineer's suggested positions (CSV) ----------
 const SUGG_KEY = 'aps-show-suggested:';
 function readShowSuggested(planId) {

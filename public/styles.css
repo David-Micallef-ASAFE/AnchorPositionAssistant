@@ -300,6 +300,12 @@ body.placing .cursor-readout, .cursor-readout:empty { display: none; }
 #layer-suggested { pointer-events: none; }
 .diamond-icon { display: inline-block; width: 8px; height: 8px; background: #dc2626; transform: rotate(45deg); margin: 0 3px 0 1px; }
 .suggested-toggle.disabled { opacity: .5; }
+.plan-ids .row input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.plan-ids label { font-size: 12px; }
+.plan-ids h3 { flex-wrap: wrap; row-gap: 2px; }
+.plan-ids-hint { font-weight: 400; }
+@media (max-width: 760px) { .plan-ids .row { flex-direction: column; gap: 6px; } }
+input.invalid { border-color: var(--danger); background: #fef2f2; }
 .brand-version { font-weight: 400; font-size: 12px; opacity: .7; }
 .warn-box.bad { border-color: #fca5a5; background: #fef2f2; }
 .result-box.rejected { border-color: #fca5a5; background: #fff7f7; }

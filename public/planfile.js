@@ -14,7 +14,7 @@ export async function exportPlanFile(store, planId) {
     format: PLAN_FILE_FORMAT,
     version: 1,
     exportedAt: new Date().toISOString(),
-    plan: { name: plan.name, width: plan.width, height: plan.height, createdAt: plan.createdAt },
+    plan: { name: plan.name, width: plan.width, height: plan.height, tenantId: plan.tenantId ?? null, spaceId: plan.spaceId ?? null, createdAt: plan.createdAt },
     image: await blobToDataUrl(image),
     suggested: plan.suggested ?? [],
     // Measurements reference other anchors by serial, so ids can be regenerated on import.
@@ -64,6 +64,8 @@ export async function importPlanFile(store, text, { name, prepareImage } = {}) {
     name: name || data.plan.name,
     width: data.plan.width,
     height: data.plan.height,
+    tenantId: data.plan.tenantId ?? null,
+    spaceId: data.plan.spaceId ?? null,
     image,
   });
   try {

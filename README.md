@@ -115,6 +115,8 @@ This is why the USB method is recommended.
    Many CAD exports are 20,000+ px wide, which makes zooming and panning crawl on any device.
    Positions are in meters, so this does not affect accuracy: a 100 m wide plan still has about 1.3 cm per pixel.
    For plans uploaded before this was added, the plan view offers an **Optimize image** button.
+   **Tenant ID** and **Space ID** (optional UUIDs) can be entered in the upload form. In the plan view they are under
+   *Floor plan IDs* at the top of the side panel, where they can be added, changed or cleared at any time.
 2. **Add reference anchors**: enter the serial, choose *Reference*, then press *Add anchor*. A pin appears in the
    middle of the view. Drag it so its **tip** sits on the known spot, such as a column or a corner. You can also type X/Y,
    or select the pin and press the arrow keys to move it 1 cm at a time (hold Shift for 10 cm).
@@ -154,6 +156,8 @@ This is why the USB method is recommended.
    - **Export SQL**: one statement per anchor, ready to run against the device database:
      `update device set space_coordinates=(10,25.3) where serial_number='123456';`
      Coordinates are in meters, rounded to the millimeter, with no trailing zeros.
+     When the floor plan has a tenant ID and/or space ID, they are set on each device too; an empty ID is left out:
+     `update device set space_coordinates=(10,25.3), tenant_id='3f2b…', space_id='9a1c…' where serial_number='123456';`
 6. **Engineer's suggested positions (optional)**: if the engineer supplied a CSV of where the anchors should go,
    press **CSV** on the map toolbar and choose the file. Each row has a name and X, Y in meters, for example:
    ```

@@ -54,14 +54,21 @@ export function sqlNumber(v) {
 const sqlString = (s) => `'${String(s).replace(/'/g, "''")}'`;
 const oneLine = (s) => String(s).replace(/[\r\n]+/g, ' ');
 
-export function buildSql(planName, anchors, when = new Date()) {
+// ids: { tenantId, spaceId } of the floor plan. Each one that is set is added to every statement
+// (tenant_id='…', space_id='…'); empty ones are left out.
+export function buildSql(planName, anchors, when = new Date(), ids = {}) {
   const list = sortAnchors(anchors);
+  let extra = '';
+  if (ids.tenantId) extra += `, tenant_id=${sqlString(ids.tenantId)}`;
+  if (ids.spaceId) extra += `, space_id=${sqlString(ids.spaceId)}`;
+  const idLine = [ids.tenantId && `tenant ${ids.tenantId}`, ids.spaceId && `space ${ids.spaceId}`].filter(Boolean).join(', ');
   const lines = [
     `-- Anchor positions for floor plan: ${oneLine(planName)}`,
     `-- Exported ${when.toISOString()} - ${list.length} anchor(s). Coordinates in meters, (0,0) = bottom-left.`,
+    ...(idLine ? [`-- Floor plan IDs: ${idLine}`] : []),
     '',
     ...list.map((a) =>
-      `update device set space_coordinates=(${sqlNumber(a.x)},${sqlNumber(a.y)}) where serial_number=${sqlString(a.serial)};`),
+      `update device set space_coordinates=(${sqlNumber(a.x)},${sqlNumber(a.y)})${extra} where serial_number=${sqlString(a.serial)};`),
     '',
   ];
   return lines.join('\r\n');

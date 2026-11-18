@@ -2,7 +2,8 @@
 //
 //   listPlans(query)                -> [{ id, name, width, height, createdAt, imageUrl, anchorCount }]
 //   getPlan(id)                     -> { ...plan, imageUrl, anchors: [...] }
-//   createPlan({ name, width, height, image: Blob })  -> plan
+//   createPlan({ name, width, height, image: Blob, tenantId?, spaceId? })  -> plan
+//   updatePlan(id, { tenantId?, spaceId? }) -> plan
 //   deletePlan(id)
 //   replacePlanImage(id, image: Blob) -> plan (with the new imageUrl)
 //   setSuggested(id, positions)     -> plan  (engineer's suggested positions, replaces the old list)
@@ -14,7 +15,7 @@
 // createServerStore(): the laptop web app, talking to server.js.
 // createLocalStore():  the phone app, keeping everything in the browser's IndexedDB on the device.
 
-import { validatePlanFields, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from './validation.js';
+import { validatePlanFields, validatePlanIds, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from './validation.js';
 
 export async function blobToDataUrl(blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -46,9 +47,12 @@ export function createServerStore() {
     kind: 'server',
     async listPlans(q = '') { return (await api('GET', '/api/floorplans?q=' + encodeURIComponent(q))).map(withUrl); },
     async getPlan(id) { return withUrl(await api('GET', '/api/floorplans/' + encodeURIComponent(id))); },
-    async createPlan({ name, width, height, image }) {
+    async createPlan({ name, width, height, image, tenantId = null, spaceId = null }) {
       if (!isImageType(image?.type)) throw new Error('Image must be a PNG or JPEG');
-      return withUrl(await api('POST', '/api/floorplans', { name, width, height, image: await blobToDataUrl(image) }));
+      return withUrl(await api('POST', '/api/floorplans', { name, width, height, tenantId, spaceId, image: await blobToDataUrl(image) }));
+    },
+    async updatePlan(id, fields) {
+      return withUrl(await api('PATCH', '/api/floorplans/' + encodeURIComponent(id), fields));
     },
     deletePlan: (id) => api('DELETE', '/api/floorplans/' + encodeURIComponent(id)),
     async replacePlanImage(id, image) {
@@ -161,8 +165,8 @@ export function createLocalStore() {
       return { ...plan, imageUrl: await imageUrlFor(id), anchors };
     },
 
-    async createPlan({ name, width, height, image }) {
-      const v = validatePlanFields({ name, width, height });
+    async createPlan({ name, width, height, image, tenantId = null, spaceId = null }) {
+      const v = validatePlanFields({ name, width, height, tenantId, spaceId });
       if (v.error) throw new HttpLikeError(v.error);
       if (!isImageType(image?.type)) throw new HttpLikeError('Image must be a PNG or JPEG');
       const plan = { id: crypto.randomUUID(), ...v.value, imageType: image.type, createdAt: now() };
@@ -198,6 +202,19 @@ export function createLocalStore() {
         return p;
       });
       dropUrl(id);
+      return { ...plan, imageUrl: await imageUrlFor(id) };
+    },
+
+    async updatePlan(id, fields) {
+      const v = validatePlanIds(fields);
+      if (v.error) throw new HttpLikeError(v.error);
+      const plan = await tx(dbP, ['floorplans'], 'readwrite', async (s) => {
+        const p = await reqP(s.floorplans.get(id));
+        if (!p) throw new HttpLikeError('Floor plan not found');
+        Object.assign(p, v.value, { updatedAt: now() });
+        s.floorplans.put(p);
+        return p;
+      });
       return { ...plan, imageUrl: await imageUrlFor(id) };
     },
 

@@ -12,8 +12,8 @@ function memoryStore() {
       if (!p) throw new Error('Floor plan not found');
       return { ...p, anchors: [...anchors.values()].filter((a) => a.floorplanId === id).map((a) => structuredClone(a)) };
     },
-    async createPlan({ name, width, height, image }) {
-      const v = validatePlanFields({ name, width, height });
+    async createPlan({ name, width, height, image, tenantId = null, spaceId = null }) {
+      const v = validatePlanFields({ name, width, height, tenantId, spaceId });
       if (v.error) throw new Error(v.error);
       const p = { id: crypto.randomUUID(), ...v.value, createdAt: new Date().toISOString() };
       plans.set(p.id, p); images.set(p.id, image);
@@ -137,4 +137,18 @@ test('suggested positions are kept in the plan file', async () => {
   const bare = await src.createPlan({ name: 'No CSV', width: 10, height: 10, image: PNG });
   const got2 = await dst.getPlan((await importPlanFile(dst, (await exportPlanFile(src, bare.id)).json)).id);
   assert.equal(got2.suggested?.length ?? 0, 0);
+});
+
+test('tenant and space IDs are kept in the plan file', async () => {
+  const src = memoryStore();
+  const T = '3f2b8c1e-5d4a-4b7e-9c2d-1a2b3c4d5e6f', S = '9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
+  const plan = await src.createPlan({ name: 'IDs', width: 10, height: 10, image: PNG, tenantId: T, spaceId: S });
+  const dst = memoryStore();
+  const got = await dst.getPlan((await importPlanFile(dst, (await exportPlanFile(src, plan.id)).json)).id);
+  assert.equal(got.tenantId, T);
+  assert.equal(got.spaceId, S);
+  const bare = await src.createPlan({ name: 'No IDs', width: 10, height: 10, image: PNG });
+  const got2 = await dst.getPlan((await importPlanFile(dst, (await exportPlanFile(src, bare.id)).json)).id);
+  assert.equal(got2.tenantId, null);
+  assert.equal(got2.spaceId, null);
 });

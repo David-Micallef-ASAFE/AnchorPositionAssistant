@@ -12,7 +12,23 @@ export function validatePlanFields(body) {
   if (!name) return { error: 'Name is required' };
   if (!(isNum(body.width) && body.width > 0 && isNum(body.height) && body.height > 0))
     return { error: 'Width and height must be positive numbers (meters)' };
-  return { value: { name, width: body.width, height: body.height } };
+  const ids = validatePlanIds(body);
+  if (ids.error) return ids;
+  return { value: { name, width: body.width, height: body.height, tenantId: null, spaceId: null, ...ids.value } };
+}
+
+// Tenant and space of a floor plan: UUIDs used in the SQL export. Optional (empty = none).
+// Only the fields present in body are checked. Returns { value } or { error }.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function validatePlanIds(body) {
+  const out = {};
+  for (const [key, label] of [['tenantId', 'Tenant ID'], ['spaceId', 'Space ID']]) {
+    if (!(key in body)) continue;
+    const v = body[key] === null || body[key] === undefined ? '' : String(body[key]).trim();
+    if (v && !UUID_RE.test(v)) return { error: `${label} must be a UUID like 123e4567-e89b-12d3-a456-426614174000 (or left empty)` };
+    out[key] = v ? v.toLowerCase() : null;
+  }
+  return { value: out };
 }
 
 // partial = true for updates (only the fields present are checked). Returns { value } or { error }.

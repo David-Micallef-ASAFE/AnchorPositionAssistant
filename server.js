@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { validatePlanFields, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from './public/validation.js';
+import { validatePlanFields, validatePlanIds, validateAnchorFields, validateSuggestedPositions, duplicateSerialMessage } from './public/validation.js';
 import { serviceWorkerSource } from './tools/buildhash.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -154,6 +154,14 @@ async function handleApi(req, res, url) {
     if (parts.length === 3) {
       if (method === 'GET') {
         return send(res, 200, { ...fp, anchors: db.anchors.filter((a) => a.floorplanId === fp.id) });
+      }
+      if (method === 'PATCH') {
+        const body = await readJson(req);
+        const v = validatePlanIds(body);
+        if (v.error) return fail(res, 400, v.error);
+        Object.assign(fp, v.value, { updatedAt: now() });
+        saveDb();
+        return send(res, 200, planWithCounts(fp));
       }
       if (method === 'DELETE') {
         db.floorplans = db.floorplans.filter((f) => f.id !== fp.id);

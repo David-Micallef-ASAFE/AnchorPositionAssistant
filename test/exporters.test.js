@@ -51,3 +51,24 @@ test('anchors are exported unless explicitly unticked', () => {
   assert.equal(isExported({ export: true }), true);
   assert.equal(isExported({ export: false }), false);
 });
+
+const T = '3f2b8c1e-5d4a-4b7e-9c2d-1a2b3c4d5e6f';
+const S = '9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
+
+test('SQL adds tenant_id and space_id when the floor plan has them', () => {
+  const sql = buildSql('Plant 1', anchors, new Date('2026-11-18T00:00:00Z'), { tenantId: T, spaceId: S });
+  assert.ok(sql.includes(`update device set space_coordinates=(10,25.3), tenant_id='${T}', space_id='${S}' where serial_number='123456';`), sql);
+  assert.ok(sql.includes(`-- Floor plan IDs: tenant ${T}, space ${S}`));
+});
+
+test('SQL leaves out an empty ID', () => {
+  const onlySpace = buildSql('Plant 1', anchors, new Date(), { tenantId: null, spaceId: S });
+  assert.ok(onlySpace.includes(`update device set space_coordinates=(10,25.3), space_id='${S}' where serial_number='123456';`), onlySpace);
+  assert.ok(!onlySpace.includes('tenant_id'));
+  const onlyTenant = buildSql('Plant 1', anchors, new Date(), { tenantId: T, spaceId: '' });
+  assert.ok(onlyTenant.includes(`update device set space_coordinates=(10,25.3), tenant_id='${T}' where serial_number='123456';`), onlyTenant);
+  assert.ok(!onlyTenant.includes('space_id'));
+  const none = buildSql('Plant 1', anchors, new Date(), {});
+  assert.ok(none.includes("update device set space_coordinates=(10,25.3) where serial_number='123456';"));
+  assert.ok(!/tenant|space_id|Floor plan IDs/.test(none));
+});
